@@ -1,12 +1,12 @@
 [package]
-name = "xcavate"
+name = "xcavate-regions"
 version = "0.1.0"
 description = "Created with Anchor"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "xcavate"
+name = "xcavate_regions"
 
 [features]
 default = []
@@ -22,13 +22,6 @@ custom-panic = []
 
 [dependencies]
 anchor-lang = "1.0.0"
-
-[dev-dependencies]
-litesvm = "0.10.0"
-solana-message = "3.0.1"
-solana-transaction = "3.0.2"
-solana-signer = "3.0.0"
-solana-keypair = "3.0.1"
 
 
 [lints.rust]

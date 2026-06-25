@@ -9,10 +9,10 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("BwiZvqF34fsCHAgvHVpujHA2s3xrqGWJ6EmXHZhuFkiR");
+declare_id!("5AeeFej1ZeiRGxVQ8TFCw9hYnAGk3KHqEGje8Lk6qz7A");
 
 #[program]
-pub mod xcavate {
+pub mod realx_education {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
