@@ -12,7 +12,7 @@ pub use state::*;
 declare_id!("5AeeFej1ZeiRGxVQ8TFCw9hYnAGk3KHqEGje8Lk6qz7A");
 
 #[program]
-pub mod realx_education {
+pub mod real_x_education {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {

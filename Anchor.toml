@@ -6,8 +6,8 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-realx-education = "5AeeFej1ZeiRGxVQ8TFCw9hYnAGk3KHqEGje8Lk6qz7A"
-xcavate-regions = "HnXYYBRgi453sKjjKwDpbMjJZxKvUEn4KPtPgnLKGkz7"
+real-x-education = "5AeeFej1ZeiRGxVQ8TFCw9hYnAGk3KHqEGje8Lk6qz7A"
+education-regions = "HnXYYBRgi453sKjjKwDpbMjJZxKvUEn4KPtPgnLKGkz7"
 xcavate-roles = "EFiBfC2bPoY3gsHQQS2kNyb8XKQSUmeAwQ9jocHPPz6i"
 
 [provider]
