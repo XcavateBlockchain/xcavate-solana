@@ -44,9 +44,6 @@ pub enum RegionsError {
     /// The auction has not ended yet.
     #[msg("Auction has not finished")]
     AuctionNotFinished,
-    /// The caller is already the highest bidder.
-    #[msg("Caller is already the highest bidder")]
-    AlreadyHighestBidder,
     /// The bid does not beat the current highest bid.
     #[msg("Bid does not beat the current bid")]
     BidTooLow,

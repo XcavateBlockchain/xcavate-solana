@@ -10,7 +10,8 @@ use xcavate_roles::state::{Role, RoleAccount};
 
 /// Bid to become a region's operator. RegionalOperator-only. The bid is locked
 /// as XCAV in the vault; the previously outbid bidder (if any) is refunded in
-/// the same instruction.
+/// the same instruction. The current leader may also raise their own bid, in
+/// which case only the difference is locked.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct BidOnRegion<'info> {
@@ -78,13 +79,20 @@ pub fn bid_on_region_handler(ctx: Context<BidOnRegion>, _region_id: u16, amount:
     require!(now < ctx.accounts.region_state.auction_expiry, RegionsError::AuctionEnded);
 
     let bidder_key = ctx.accounts.bidder.key();
-    require!(
-        ctx.accounts.region_state.highest_bidder != Some(bidder_key),
-        RegionsError::AlreadyHighestBidder
-    );
 
-    // Validate the bid and figure out who to refund.
-    let refund: u64 = match ctx.accounts.region_state.highest_bidder {
+    // Work out how much extra XCAV to lock and who (if anyone) to refund.
+    let (lock_amount, refund) = match ctx.accounts.region_state.highest_bidder {
+        // The current leader raises their own bid: their existing collateral is
+        // already in the vault, so only the difference needs locking.
+        Some(prev) if prev == bidder_key => {
+            require!(amount > ctx.accounts.region_state.collateral, RegionsError::BidTooLow);
+            let extra = amount
+                .checked_sub(ctx.accounts.region_state.collateral)
+                .ok_or(RegionsError::Overflow)?;
+            (extra, 0)
+        }
+        // A new bidder outbids the leader: lock the full bid and refund the
+        // outbid leader their collateral.
         Some(prev) => {
             require!(amount > ctx.accounts.region_state.collateral, RegionsError::BidTooLow);
             let previous = ctx
@@ -94,25 +102,26 @@ pub fn bid_on_region_handler(ctx: Context<BidOnRegion>, _region_id: u16, amount:
                 .ok_or(RegionsError::MissingPreviousBidder)?;
             require!(previous.owner == prev, RegionsError::WrongPreviousBidder);
             require!(previous.mint == ctx.accounts.config.xcav_mint, RegionsError::InvalidMint);
-            ctx.accounts.region_state.collateral
+            (amount, ctx.accounts.region_state.collateral)
         }
+        // The opening bid: it must clear the minimum collateral.
         None => {
             require!(amount >= ctx.accounts.region_state.collateral, RegionsError::BidBelowMinimum);
-            0
+            (amount, 0)
         }
     };
 
     let decimals = ctx.accounts.xcav_mint.decimals;
     let config_bump = ctx.accounts.config.bump;
 
-    // Lock the new bid in the vault, then refund the outbid bidder from it.
+    // Lock the bid (or top-up) in the vault, then refund the outbid bidder.
     lock_to_vault(
         &ctx.accounts.token_program.to_account_info(),
         &ctx.accounts.bidder_token.to_account_info(),
         &ctx.accounts.xcav_mint.to_account_info(),
         &ctx.accounts.vault.to_account_info(),
         &ctx.accounts.bidder.to_account_info(),
-        amount,
+        lock_amount,
         decimals,
     )?;
 

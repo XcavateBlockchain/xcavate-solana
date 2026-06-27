@@ -655,6 +655,41 @@ fn revote_replaces_previous_vote() {
     assert_eq!(vault_balance(&svm), DEPOSIT + 300_000_000);
 }
 
+#[test]
+fn vote_after_expiry_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    warp_past_voting(&mut svm);
+    let voter = actor(&mut svm);
+    fails_with(
+        &mut svm,
+        vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+        "ProposalExpired",
+    );
+}
+
+#[test]
+fn vote_with_insufficient_balance_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // A voter who holds more than the minimum but less than they try to lock.
+    let poor = funded(&mut svm);
+    give_xcav(&mut svm, &poor.pubkey(), 150_000_000);
+    fails_with(
+        &mut svm,
+        vote_ix(&poor.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &poor,
+        &[&poor],
+        "insufficient funds",
+    );
+}
+
 // ============================ finalize ============================
 
 #[test]
@@ -773,6 +808,86 @@ fn bid_fails_before_auction() {
     );
 }
 
+#[test]
+fn bid_same_bidder_can_raise() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+
+    ok(&mut svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), &operator, &[&operator]);
+    let vault_after_first = vault_balance(&svm);
+    let op_after_first = xcav_balance(&svm, &operator.pubkey());
+
+    // The current leader raises their own bid; only the difference is locked.
+    ok(&mut svm, bid_ix(&operator.pubkey(), 1, 700_000_000, None), &operator, &[&operator]);
+
+    let rs = region_state_of(&svm, 1);
+    assert_eq!(rs.highest_bidder, Some(operator.pubkey()));
+    assert_eq!(rs.collateral, 700_000_000);
+    // Vault and bidder moved by exactly the top-up, not the whole new bid.
+    assert_eq!(vault_balance(&svm) - vault_after_first, 100_000_000);
+    assert_eq!(op_after_first - xcav_balance(&svm, &operator.pubkey()), 100_000_000);
+}
+
+#[test]
+fn bid_same_bidder_cannot_lower() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+    ok(&mut svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), &operator, &[&operator]);
+    // Re-bidding at the same amount is not a raise.
+    fails_with(
+        &mut svm,
+        bid_ix(&operator.pubkey(), 1, 600_000_000, None),
+        &operator,
+        &[&operator],
+        "BidTooLow",
+    );
+}
+
+#[test]
+fn bid_below_minimum_fails() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+    // The opening bid must clear the minimum region deposit (500_000_000).
+    fails_with(
+        &mut svm,
+        bid_ix(&operator.pubkey(), 1, 100_000_000, None),
+        &operator,
+        &[&operator],
+        "BidBelowMinimum",
+    );
+}
+
+#[test]
+fn bid_too_low_fails() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+    ok(&mut svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), &operator, &[&operator]);
+
+    // A second bidder must strictly beat the standing bid.
+    let op2 = new_operator(&mut svm, &authority);
+    fails_with(
+        &mut svm,
+        bid_ix(&op2.pubkey(), 1, 600_000_000, Some(operator.pubkey())),
+        &op2,
+        &[&op2],
+        "BidTooLow",
+    );
+}
+
+#[test]
+fn bid_after_auction_ends_fails() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+    warp_past_voting(&mut svm); // push past the auction expiry
+    fails_with(
+        &mut svm,
+        bid_ix(&operator.pubkey(), 1, 600_000_000, None),
+        &operator,
+        &[&operator],
+        "AuctionEnded",
+    );
+}
+
 // ============================ create_new_region ============================
 
 #[test]
@@ -813,6 +928,21 @@ fn create_region_fails_for_non_winner() {
     );
 }
 
+#[test]
+fn create_region_fails_before_auction_ends() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+    ok(&mut svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), &operator, &[&operator]);
+    // Winner is set, but the auction window is still open.
+    fails_with(
+        &mut svm,
+        create_region_ix(&operator.pubkey(), 1),
+        &operator,
+        &[&operator],
+        "AuctionNotFinished",
+    );
+}
+
 // ============================ cleanup ============================
 
 #[test]
@@ -833,6 +963,42 @@ fn unlock_voting_token_works() {
     assert_eq!(xcav_balance(&svm, &voter.pubkey()) - voter_before, 200_000_000);
     // Only the proposal deposit is left in the vault.
     assert_eq!(vault_balance(&svm), DEPOSIT);
+}
+
+#[test]
+fn unlock_fails_while_voting_ongoing() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    // Window is still open, so the lock can't be reclaimed yet.
+    fails_with(
+        &mut svm,
+        unlock_ix(&voter.pubkey(), id),
+        &voter,
+        &[&voter],
+        "VotingStillOngoing",
+    );
+}
+
+#[test]
+fn unlock_without_vote_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // Someone who never voted has no vote record to unlock.
+    let stranger = actor(&mut svm);
+    warp_past_voting(&mut svm);
+    fails_with(
+        &mut svm,
+        unlock_ix(&stranger.pubkey(), id),
+        &stranger,
+        &[&stranger],
+        "AccountNotInitialized",
+    );
 }
 
 #[test]
