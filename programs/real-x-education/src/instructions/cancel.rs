@@ -226,6 +226,7 @@ pub fn cancel_booking_handler(
     let counter = &mut ctx.accounts.counter;
     counter.school = ctx.accounts.school.key();
     counter.count = count;
+    counter.bump = ctx.bumps.counter;
 
     let cancellation = &mut ctx.accounts.cancellation;
     cancellation.school = ctx.accounts.school.key();
