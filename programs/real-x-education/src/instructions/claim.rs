@@ -33,7 +33,6 @@ pub struct ClaimBooking<'info> {
         ],
         bump = lecturer_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = lecturer_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub lecturer_role: Box<Account<'info, RoleAccount>>,
 

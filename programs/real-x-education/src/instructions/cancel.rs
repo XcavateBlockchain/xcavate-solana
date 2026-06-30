@@ -42,7 +42,6 @@ pub struct CancelBooking<'info> {
         ],
         bump = school_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = school_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub school_role: Box<Account<'info, RoleAccount>>,
 
@@ -139,6 +138,10 @@ pub fn cancel_booking_handler(
     module_id: u64,
     booking_id: u64,
 ) -> Result<()> {
+    require!(
+        ctx.accounts.booking.score.is_none(),
+        EducationError::ScoreAlreadySet
+    );
     let clock = Clock::get()?;
     let config_bump = ctx.accounts.config.bump;
     let per_token = ctx.accounts.booking.price_per_token;
@@ -274,7 +277,6 @@ pub struct ClearOldCancellation<'info> {
         ],
         bump = school_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = school_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub school_role: Box<Account<'info, RoleAccount>>,
 
@@ -343,7 +345,6 @@ pub struct CancelClaim<'info> {
         ],
         bump = lecturer_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = lecturer_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub lecturer_role: Box<Account<'info, RoleAccount>>,
 

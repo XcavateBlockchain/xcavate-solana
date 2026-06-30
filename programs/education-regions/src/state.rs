@@ -10,15 +10,6 @@ pub enum RegionIdentifier {
 }
 
 impl RegionIdentifier {
-    pub fn code(&self) -> u16 {
-        match self {
-            RegionIdentifier::England => 1,
-            RegionIdentifier::France => 2,
-            RegionIdentifier::Japan => 3,
-            RegionIdentifier::India => 4,
-        }
-    }
-
     /// Returns the identifier for a raw id, or `None` if it isn't recognised.
     pub fn from_code(code: u16) -> Option<Self> {
         match code {

@@ -55,6 +55,7 @@ pub fn update_authority_handler(
     ctx: Context<UpdateAuthority>,
     new_authority: Pubkey,
 ) -> Result<()> {
+    require!(new_authority != Pubkey::default(), RolesError::InvalidAuthority);
     let config = &mut ctx.accounts.config;
     let old_authority = config.authority;
     config.authority = new_authority;

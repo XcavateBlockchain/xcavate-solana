@@ -32,7 +32,6 @@ pub struct MintCredential<'info> {
         ],
         bump = agent_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = agent_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub agent_role: Box<Account<'info, RoleAccount>>,
 

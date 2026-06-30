@@ -11,9 +11,6 @@ pub enum RegionsError {
     /// The supplied mint is not the configured XCAV mint.
     #[msg("Invalid XCAV mint")]
     InvalidMint,
-    /// The caller's RegionalOperator role is not compliant.
-    #[msg("Caller is not a compliant regional operator")]
-    NotCompliant,
     /// The region id is not one of the recognised regions.
     #[msg("Unknown region")]
     InvalidRegion,

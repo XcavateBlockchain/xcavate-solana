@@ -8,9 +8,9 @@ use crate::vault::lock_to_vault;
 
 use xcavate_roles::state::{Role, RoleAccount};
 
-/// Propose a new region. The caller must be a compliant RegionalOperator, the
-/// region must not already exist, and there must be no other open proposal for
-/// it. The proposer's deposit is locked in the vault.
+/// Propose a new region. The caller must be a RegionalOperator, the region must
+/// not already exist, and there must be no other open proposal for it. The
+/// proposer's deposit is locked in the vault.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct ProposeNewRegion<'info> {
@@ -51,7 +51,6 @@ pub struct ProposeNewRegion<'info> {
         ],
         bump = operator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = operator_role.is_compliant() @ RegionsError::NotCompliant,
     )]
     pub operator_role: Account<'info, RoleAccount>,
 

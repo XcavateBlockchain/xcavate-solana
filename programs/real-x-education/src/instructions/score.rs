@@ -39,7 +39,6 @@ pub struct SubmitImpactScore<'info> {
         ],
         bump = agent_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = agent_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub agent_role: Box<Account<'info, RoleAccount>>,
 
@@ -193,6 +192,10 @@ pub fn submit_impact_score_handler(
             let reduction = ctx.accounts.config.deliveries_per_strike_reduction;
             if reduction > 0 && deliverer.successful_deliveries % reduction == 0 {
                 deliverer.active_strikes = deliverer.active_strikes.saturating_sub(1);
+                emit!(StrikeReduced {
+                    lecturer,
+                    new_strikes: deliverer.active_strikes,
+                });
             }
 
             (cc, ro, proto, lecturer_pay)
@@ -327,6 +330,12 @@ fn pay_out<'info>(
         amount,
         decimals,
     )
+}
+
+#[event]
+pub struct StrikeReduced {
+    pub lecturer: Pubkey,
+    pub new_strikes: u8,
 }
 
 #[event]

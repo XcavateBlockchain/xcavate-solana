@@ -62,6 +62,13 @@ impl ConfigParams {
         );
         require!(self.module_price > 0, EducationError::InvalidConfig);
         require!(self.max_module_tokens > 0, EducationError::InvalidConfig);
+        require!(
+            self.module_deposit > 0
+                && self.booking_deposit > 0
+                && self.deliverer_deposit > 0
+                && self.proposal_deposit > 0,
+            EducationError::InvalidConfig
+        );
         Ok(())
     }
 
@@ -222,6 +229,7 @@ pub fn update_authority_handler(
     ctx: Context<UpdateAuthority>,
     new_authority: Pubkey,
 ) -> Result<()> {
+    require!(new_authority != Pubkey::default(), EducationError::InvalidConfig);
     let config = &mut ctx.accounts.config;
     let old_authority = config.authority;
     config.authority = new_authority;

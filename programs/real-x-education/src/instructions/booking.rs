@@ -38,7 +38,6 @@ pub struct BookModule<'info> {
         ],
         bump = school_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = school_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub school_role: Box<Account<'info, RoleAccount>>,
 

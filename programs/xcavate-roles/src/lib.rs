@@ -15,7 +15,8 @@ declare_id!("EFiBfC2bPoY3gsHQQS2kNyb8XKQSUmeAwQ9jocHPPz6i");
 ///
 /// Tracks which addresses hold which roles and whether each assignment is
 /// KYC-compliant. Other programs gate actions by loading the `RoleAccount`
-/// PDA (`["role", user, role.seed_byte()]`) and checking `is_compliant()`.
+/// PDA (`["role", user, role.seed_byte()]`), which requires the role to be
+/// assigned.
 #[program]
 pub mod xcavate_roles {
     use super::*;

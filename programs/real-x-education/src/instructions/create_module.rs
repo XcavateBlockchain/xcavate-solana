@@ -9,7 +9,7 @@ use crate::state::{Config, Module};
 use education_regions::state::Region;
 use xcavate_roles::state::{Role, RoleAccount};
 
-/// Create a learning module. The caller must be a compliant ModuleCreator and
+/// Create a learning module. The caller must be a ModuleCreator and
 /// the region must already exist. A fresh token mint is fractionalized into
 /// `module_amount` shares held in the module vault, all credited to the creator
 /// as the initial sponsor allocation, and the creator's XCAV deposit is locked
@@ -54,7 +54,6 @@ pub struct CreateModule<'info> {
         ],
         bump = creator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
 

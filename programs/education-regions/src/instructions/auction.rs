@@ -29,7 +29,6 @@ pub struct BidOnRegion<'info> {
         ],
         bump = operator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = operator_role.is_compliant() @ RegionsError::NotCompliant,
     )]
     pub operator_role: Box<Account<'info, RoleAccount>>,
 
@@ -64,7 +63,7 @@ pub struct BidOnRegion<'info> {
 
     /// The outbid bidder's XCAV account to refund; required (and validated in
     /// the handler) only when there already is a highest bidder.
-    #[account(mut)]
+    #[account(mut, token::mint = config.xcav_mint)]
     pub previous_bidder_token: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
 
     pub token_program: Interface<'info, TokenInterface>,
@@ -78,6 +77,7 @@ pub fn bid_on_region_handler(ctx: Context<BidOnRegion>, _region_id: u16, amount:
     let now = Clock::get()?.unix_timestamp;
     require!(now < ctx.accounts.region_state.auction_expiry, RegionsError::AuctionEnded);
 
+    require!(amount > 0, RegionsError::BidBelowMinimum);
     let bidder_key = ctx.accounts.bidder.key();
 
     // Work out how much extra XCAV to lock and who (if anyone) to refund.

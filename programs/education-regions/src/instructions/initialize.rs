@@ -38,6 +38,7 @@ impl ConfigParams {
             self.minimum_voting_amount > 0 && self.minimum_region_deposit > 0,
             RegionsError::InvalidConfig
         );
+        require!(self.proposal_deposit > 0, RegionsError::InvalidConfig);
         Ok(())
     }
 
@@ -168,6 +169,7 @@ pub fn update_authority_handler(
     ctx: Context<UpdateAuthority>,
     new_authority: Pubkey,
 ) -> Result<()> {
+    require!(new_authority != Pubkey::default(), RegionsError::InvalidConfig);
     let config = &mut ctx.accounts.config;
     let old_authority = config.authority;
     config.authority = new_authority;

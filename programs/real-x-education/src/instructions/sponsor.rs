@@ -37,7 +37,6 @@ pub struct SponsorModule<'info> {
         ],
         bump = sponsor_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = sponsor_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub sponsor_role: Box<Account<'info, RoleAccount>>,
 
@@ -182,7 +181,6 @@ pub struct ReclaimSponsorship<'info> {
         ],
         bump = sponsor_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = sponsor_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub sponsor_role: Box<Account<'info, RoleAccount>>,
 

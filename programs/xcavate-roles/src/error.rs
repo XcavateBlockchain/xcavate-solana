@@ -8,4 +8,7 @@ pub enum RolesError {
     /// The permission is already set to the requested value.
     #[msg("Permission is already set to this value")]
     PermissionAlreadySet,
+    /// The new authority cannot be the zero address.
+    #[msg("Invalid authority address")]
+    InvalidAuthority,
 }

@@ -34,7 +34,6 @@ pub struct BurnUnsponsored<'info> {
         ],
         bump = creator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
 
@@ -136,7 +135,6 @@ pub struct RemoveModule<'info> {
         ],
         bump = creator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
 

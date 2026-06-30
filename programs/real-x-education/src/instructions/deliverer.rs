@@ -26,7 +26,6 @@ pub struct RegisterDeliverer<'info> {
         ],
         bump = deliverer_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = deliverer_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub deliverer_role: Box<Account<'info, RoleAccount>>,
 

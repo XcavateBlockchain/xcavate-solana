@@ -72,10 +72,10 @@ fn init_proposal_common(
 
 // ============================ propose ============================
 
-/// Open a proposal to create a module. The proposer must hold (and pass KYC on)
-/// the role they propose under: creator, sponsor, school, or lecturer. The
-/// proposer's XCAV stake is locked in the vault, returned when the proposal
-/// passes and slashed when it fails.
+/// Open a proposal to create a module. The proposer must hold the role they
+/// propose under: creator, sponsor, school, or lecturer. The proposer's XCAV
+/// stake is locked in the vault, returned when the proposal passes and slashed
+/// when it fails.
 #[derive(Accounts)]
 #[instruction(role: Role, region: u16)]
 pub struct CreateModuleProposal<'info> {
@@ -113,7 +113,6 @@ pub struct CreateModuleProposal<'info> {
         ],
         bump = proposer_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = proposer_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub proposer_role: Box<Account<'info, RoleAccount>>,
 
@@ -237,7 +236,6 @@ pub struct CreateSponsorProposal<'info> {
         ],
         bump = sponsor_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = sponsor_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub sponsor_role: Box<Account<'info, RoleAccount>>,
 
@@ -601,9 +599,7 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
         .ok_or(EducationError::Overflow)?;
     let approval_base = yes.checked_add(no).ok_or(EducationError::Overflow)?;
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
-    // Require at least one yes/no vote: an all-abstain proposal has no support
-    // and must not pass on the trivially-satisfied 0 >= 0 threshold.
-    let meets_threshold = approval_base != 0
+    let meets_threshold = total != 0
         && (yes as u128).saturating_mul(10_000)
             >= (approval_base as u128).saturating_mul(threshold_bps);
     let meets_quorum = total >= ctx.accounts.config.quorum;
@@ -652,8 +648,8 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
 // ============================ claim ============================
 
 /// Claim a passed proposal to reserve the right to build it, locking a bond so
-/// the reservation can't be held for free. The caller must be a compliant
-/// ModuleCreator. A creator-opened proposal can only be built by its proposer;
+/// the reservation can't be held for free. The caller must be a ModuleCreator.
+/// A creator-opened proposal can only be built by its proposer;
 /// otherwise any creator may claim it, unless they've already been banned from
 /// it for failing review twice. While a claimant has a retry pending, only they
 /// can re-claim.
@@ -693,7 +689,6 @@ pub struct ClaimProposal<'info> {
         ],
         bump = creator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
 
@@ -925,7 +920,6 @@ pub struct ReviewProposal<'info> {
         ],
         bump = agent_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = agent_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub agent_role: Box<Account<'info, RoleAccount>>,
 
@@ -1045,7 +1039,6 @@ pub struct MintProposedModule<'info> {
         ],
         bump = creator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
 
@@ -1178,7 +1171,6 @@ pub struct MintSponsoredModule<'info> {
         ],
         bump = creator_role.bump,
         seeds::program = xcavate_roles::ID,
-        constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
 

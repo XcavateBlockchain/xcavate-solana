@@ -14,12 +14,6 @@ pub enum EducationError {
     /// The treasury account does not match the configured treasury.
     #[msg("Invalid treasury account")]
     InvalidTreasury,
-    /// The caller's role is not KYC-compliant.
-    #[msg("Caller's role is not compliant")]
-    NotCompliant,
-    /// The region id is not one of the recognised regions.
-    #[msg("Unknown region")]
-    RegionUnknown,
     /// A token amount was zero where a positive value is required.
     #[msg("Amount cannot be zero")]
     AmountCannotBeZero,
@@ -35,9 +29,6 @@ pub enum EducationError {
     /// The payment asset is not one of the accepted assets.
     #[msg("Payment asset is not supported")]
     PaymentAssetNotSupported,
-    /// The referenced module does not exist.
-    #[msg("Module is not available")]
-    ModuleNotAvailable,
     /// Not enough tokens are available in the requested allocation.
     #[msg("Not enough tokens available")]
     NotEnoughTokenAvailable,
@@ -53,18 +44,12 @@ pub enum EducationError {
     /// The sponsor has no tokens left to book.
     #[msg("Sponsor has no funded tokens available")]
     NoFundedModulesFromSponsor,
-    /// The referenced booking does not exist.
-    #[msg("Booking is not available")]
-    NoBookingAvailable,
     /// The booking already has a lecturer.
     #[msg("Booking already has a lecturer")]
     LecturerAlreadySet,
     /// A school cannot deliver its own booking.
     #[msg("School cannot claim its own booking")]
     SchoolCannotClaimOwnBooking,
-    /// The lecturer is not registered as a deliverer.
-    #[msg("Module deliverer is not registered")]
-    ModuleDelivererNotRegistered,
     /// The deliverer's deposit is too low for another concurrent claim.
     #[msg("Insufficient deposit to claim")]
     InsufficientDepositToClaim,
