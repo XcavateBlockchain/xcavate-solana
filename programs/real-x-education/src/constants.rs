@@ -56,3 +56,16 @@ pub const CANCELLATION_SEED: &[u8] = b"cancellation";
 /// PDA seed for a non-transferable credential record issued on delivery.
 #[constant]
 pub const CREDENTIAL_SEED: &[u8] = b"credential";
+
+/// PDA seed for a module proposal.
+#[constant]
+pub const MODULE_PROPOSAL_SEED: &[u8] = b"module_proposal";
+
+/// PDA seed for one voter's locked vote on a proposal.
+#[constant]
+pub const PROPOSAL_VOTE_SEED: &[u8] = b"proposal_vote";
+
+/// PDA seed for a sponsor-opened proposal's pre-sponsorship escrow (holds the
+/// auto-sponsorship payment until the module is created or the proposal dies).
+#[constant]
+pub const PROPOSAL_ESCROW_SEED: &[u8] = b"proposal_escrow";

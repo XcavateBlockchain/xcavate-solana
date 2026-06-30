@@ -6,6 +6,7 @@
 //! and a created `Region` is seeded directly so we don't have to drive the whole
 //! regions governance flow here. Broader negative-case tests come later.
 
+use anchor_lang::solana_program::clock::Clock;
 use anchor_lang::solana_program::program_option::COption;
 use anchor_lang::solana_program::program_pack::Pack;
 use anchor_lang::{
@@ -24,10 +25,13 @@ use solana_transaction::versioned::VersionedTransaction;
 
 use education_regions::state::Region;
 use real_x_education::instructions::ConfigParams;
-use real_x_education::state::{Booking, Config, Module, Sponsorship};
+use real_x_education::state::{
+    Booking, Config, Deliverer, Module, ModuleProposal, ModuleVote, ProposalStatus, Sponsorship,
+};
 use real_x_education::{
-    BOOKING_SEED, BOOK_ESCROW_SEED, CONFIG_SEED, DELIVERER_SEED, MODULE_MINT_SEED, MODULE_SEED,
-    MODULE_VAULT_SEED, SPONSORSHIP_SEED, SPONSOR_ESCROW_SEED, VAULT_SEED,
+    BOOKING_SEED, BOOK_ESCROW_SEED, CONFIG_SEED, DELIVERER_SEED, MODULE_MINT_SEED,
+    MODULE_PROPOSAL_SEED, MODULE_SEED, MODULE_VAULT_SEED, PROPOSAL_ESCROW_SEED, PROPOSAL_VOTE_SEED,
+    SPONSORSHIP_SEED, SPONSOR_ESCROW_SEED, VAULT_SEED,
 };
 use xcavate_roles::state::Role;
 
@@ -120,6 +124,19 @@ fn region_pda(region_id: u16) -> Pubkey {
     )
     .0
 }
+fn proposal_pda(proposal_id: u64) -> Pubkey {
+    Pubkey::find_program_address(&[MODULE_PROPOSAL_SEED, &proposal_id.to_le_bytes()], &eid()).0
+}
+fn proposal_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[PROPOSAL_VOTE_SEED, &proposal_id.to_le_bytes(), voter.as_ref()],
+        &eid(),
+    )
+    .0
+}
+fn proposal_escrow_pda(proposal_id: u64) -> Pubkey {
+    Pubkey::find_program_address(&[PROPOSAL_ESCROW_SEED, &proposal_id.to_le_bytes()], &eid()).0
+}
 
 // --- mints / token accounts ---
 fn xcav_mint() -> Pubkey {
@@ -199,6 +216,17 @@ fn ok(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keypair])
     }
 }
 
+/// Run an instruction expecting it to fail, and assert the logs name `code`.
+fn err(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keypair], code: &str) {
+    match process(svm, ix, payer, signers) {
+        Ok(_) => panic!("expected failure with {code}, but it succeeded"),
+        Err(failed) => {
+            let logs = failed.meta.logs.join("\n");
+            assert!(logs.contains(code), "expected error {code}, got logs:\n{logs}");
+        }
+    }
+}
+
 fn funded(svm: &mut LiteSVM) -> Keypair {
     let kp = Keypair::new();
     svm.airdrop(&kp.pubkey(), 100_000_000_000).unwrap();
@@ -270,6 +298,13 @@ fn default_params() -> ConfigParams {
         max_strikes: 3,
         strike_slash_bps: 1_000,
         deliveries_per_strike_reduction: 5,
+        proposal_deposit: MODULE_DEPOSIT,
+        minimum_voting_amount: 1_000,
+        voting_period: 1_000,
+        threshold_bps: 5_000,
+        quorum: 10_000,
+        pre_sponsor_amount: 2,
+        claim_period: 1_000,
         accepted_assets: [usdc_mint(), Pubkey::default(), Pubkey::default()],
     }
 }
@@ -394,6 +429,26 @@ fn claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
     )
 }
 
+fn cancel_claim_ix(lecturer: &Pubkey, authority: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::CancelClaim { module_id, booking_id }.data(),
+        real_x_education::accounts::CancelClaim {
+            lecturer: *lecturer,
+            config: config_pda(),
+            module: module_pda(module_id),
+            lecturer_role: role_pda(lecturer, Role::ModuleDeliverer),
+            deliverer: deliverer_pda(lecturer),
+            booking: booking_pda(module_id, booking_id),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            treasury: token_acc(&xcav_mint(), authority),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn submit_score_ix(
     agent: &Pubkey,
@@ -444,10 +499,283 @@ fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
             vault: vault(),
             school_xcav: token_acc(&xcav_mint(), school),
             booking: booking_pda(module_id, booking_id),
+            booking_escrow: book_escrow_pda(module_id, booking_id),
+            sponsorship: sponsorship_pda(module_id, 0),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
+}
+
+fn reclaim_sponsorship_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ReclaimSponsorship { module_id, sponsor_id, amount }.data(),
+        real_x_education::accounts::ReclaimSponsorship {
+            sponsor: *sponsor,
+            config: config_pda(),
+            module: module_pda(module_id),
+            sponsor_role: role_pda(sponsor, Role::ModuleSponsor),
+            sponsorship: sponsorship_pda(module_id, sponsor_id),
+            payment_mint: usdc_mint(),
+            sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
+            sponsor_payment: token_acc(&usdc_mint(), sponsor),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn close_sponsorship_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::CloseSponsorship { module_id, sponsor_id }.data(),
+        real_x_education::accounts::CloseSponsorship {
+            sponsor: *sponsor,
+            config: config_pda(),
+            sponsorship: sponsorship_pda(module_id, sponsor_id),
+            sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+// --- governance ix builders ---
+fn create_proposal_ix(
+    proposer: &Pubkey,
+    role: Role,
+    region: u16,
+    proposal_id: u64,
+    amount: u64,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::CreateModuleProposal {
+            role,
+            region,
+            module_amount: amount,
+            metadata: "ipfs://p".to_string(),
+        }
+        .data(),
+        real_x_education::accounts::CreateModuleProposal {
+            proposer: *proposer,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            proposer_xcav: token_acc(&xcav_mint(), proposer),
+            vault: vault(),
+            proposer_role: role_pda(proposer, role),
+            region_account: region_pda(region),
+            proposal: proposal_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn vote_ix(voter: &Pubkey, proposal_id: u64, vote: ModuleVote, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::VoteOnProposal { proposal_id, vote, amount }.data(),
+        real_x_education::accounts::VoteOnProposal {
+            voter: *voter,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            voter_xcav: token_acc(&xcav_mint(), voter),
+            vault: vault(),
+            proposal: proposal_pda(proposal_id),
+            vote_record: proposal_vote_pda(proposal_id, voter),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn finalize_proposal_ix(cranker: &Pubkey, proposal_id: u64, proposer: &Pubkey, authority: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::FinalizeProposal { proposal_id }.data(),
+        real_x_education::accounts::FinalizeProposal {
+            cranker: *cranker,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            proposal: proposal_pda(proposal_id),
+            proposer: *proposer,
+            proposer_xcav: token_acc(&xcav_mint(), proposer),
+            treasury: token_acc(&xcav_mint(), authority),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn claim_proposal_ix(creator: &Pubkey, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ClaimProposal { proposal_id, content_uri: "ipfs://c".to_string() }.data(),
+        real_x_education::accounts::ClaimProposal {
+            creator: *creator,
+            config: config_pda(),
+            creator_role: role_pda(creator, Role::ModuleCreator),
+            proposal: proposal_pda(proposal_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ReviewProposal { proposal_id, passed }.data(),
+        real_x_education::accounts::ReviewProposal {
+            agent: *agent,
+            config: config_pda(),
+            agent_role: role_pda(agent, Role::ModuleAIAgent),
+            proposal: proposal_pda(proposal_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn mint_proposed_ix(creator: &Pubkey, proposal_id: u64, module_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::MintProposedModule { proposal_id }.data(),
+        real_x_education::accounts::MintProposedModule {
+            creator: *creator,
+            config: config_pda(),
+            proposal: proposal_pda(proposal_id),
+            proposer: *creator,
+            creator_role: role_pda(creator, Role::ModuleCreator),
+            xcav_mint: xcav_mint(),
+            creator_xcav: token_acc(&xcav_mint(), creator),
+            vault: vault(),
+            module: module_pda(module_id),
+            module_mint: module_mint_pda(module_id),
+            module_vault: module_vault_pda(module_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn create_sponsor_proposal_ix(proposer: &Pubkey, region: u16, proposal_id: u64, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::CreateSponsorProposal {
+            region,
+            module_amount: amount,
+            metadata: "ipfs://sp".to_string(),
+        }
+        .data(),
+        real_x_education::accounts::CreateSponsorProposal {
+            proposer: *proposer,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            proposer_xcav: token_acc(&xcav_mint(), proposer),
+            vault: vault(),
+            sponsor_role: role_pda(proposer, Role::ModuleSponsor),
+            region_account: region_pda(region),
+            payment_mint: usdc_mint(),
+            proposer_payment: token_acc(&usdc_mint(), proposer),
+            proposal: proposal_pda(proposal_id),
+            proposal_escrow: proposal_escrow_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mint_sponsored_ix(
+    creator: &Pubkey,
+    proposer: &Pubkey,
+    proposal_id: u64,
+    module_id: u64,
+    sponsor_id: u64,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::MintSponsoredModule { proposal_id }.data(),
+        real_x_education::accounts::MintSponsoredModule {
+            creator: *creator,
+            config: config_pda(),
+            proposal: proposal_pda(proposal_id),
+            proposer: *proposer,
+            creator_role: role_pda(creator, Role::ModuleCreator),
+            xcav_mint: xcav_mint(),
+            creator_xcav: token_acc(&xcav_mint(), creator),
+            vault: vault(),
+            module: module_pda(module_id),
+            module_mint: module_mint_pda(module_id),
+            module_vault: module_vault_pda(module_id),
+            payment_mint: usdc_mint(),
+            proposal_escrow: proposal_escrow_pda(proposal_id),
+            sponsorship: sponsorship_pda(module_id, sponsor_id),
+            sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn unlock_vote_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::UnlockProposalVote { proposal_id }.data(),
+        real_x_education::accounts::UnlockProposalVote {
+            voter: *voter,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            voter_xcav: token_acc(&xcav_mint(), voter),
+            vault: vault(),
+            vote_record: proposal_vote_pda(proposal_id, voter),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ExpireProposal { proposal_id }.data(),
+        real_x_education::accounts::ExpireProposal {
+            cranker: *cranker,
+            proposal: proposal_pda(proposal_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn reclaim_pre_sponsor_ix(sponsor: &Pubkey, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ReclaimPreSponsor { proposal_id }.data(),
+        real_x_education::accounts::ReclaimPreSponsor {
+            sponsor: *sponsor,
+            config: config_pda(),
+            proposal: proposal_pda(proposal_id),
+            payment_mint: usdc_mint(),
+            sponsor_payment: token_acc(&usdc_mint(), sponsor),
+            proposal_escrow: proposal_escrow_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Push the clock past the proposal voting window so finalize can run.
+fn warp_past_voting(svm: &mut LiteSVM) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 2_000;
+    svm.set_sysvar(&clock);
 }
 
 // --- world ---
@@ -509,6 +837,12 @@ fn config(svm: &LiteSVM) -> Config {
 }
 fn module_of(svm: &LiteSVM, id: u64) -> Module {
     Module::try_deserialize(&mut &svm.get_account(&module_pda(id)).unwrap().data[..]).unwrap()
+}
+fn deliverer_of(svm: &LiteSVM, who: &Pubkey) -> Deliverer {
+    Deliverer::try_deserialize(&mut &svm.get_account(&deliverer_pda(who)).unwrap().data[..]).unwrap()
+}
+fn proposal_of(svm: &LiteSVM, id: u64) -> ModuleProposal {
+    ModuleProposal::try_deserialize(&mut &svm.get_account(&proposal_pda(id)).unwrap().data[..]).unwrap()
 }
 
 // ============================ tests ============================
@@ -624,4 +958,224 @@ fn full_flow_through_score_works() {
     ok(&mut w.svm, finish_ix(&school.pubkey(), 0, 0), &school, &[&school]);
     assert_eq!(balance(&w.svm, &xcav_mint(), &school.pubkey()) - school_before, BOOKING_DEPOSIT);
     assert!(w.svm.get_account(&booking_pda(0, 0)).map(|a| a.data.is_empty()).unwrap_or(true));
+}
+
+#[test]
+fn cancel_claim_rejected_after_score() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+    let agent = with_role(&mut w, Role::ModuleAIAgent);
+    let operator = w.operator.pubkey();
+    let protocol = w.protocol.pubkey();
+    let authority = w.authority.pubkey();
+
+    ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
+    ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 5), &sponsor, &[&sponsor]);
+    ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
+    ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+    ok(&mut w.svm, claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
+    ok(
+        &mut w.svm,
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000, 1, &creator.pubkey(), &operator, &protocol, &lecturer.pubkey(), &sponsor.pubkey()),
+        &agent,
+        &[&agent],
+    );
+
+    // The booking is settled: cancelling the (already scored) claim must be
+    // rejected so the released claim can't be double-counted.
+    let claims_before = deliverer_of(&w.svm, &lecturer.pubkey()).active_claims;
+    err(
+        &mut w.svm,
+        cancel_claim_ix(&lecturer.pubkey(), &authority, 0, 0),
+        &lecturer,
+        &[&lecturer],
+        "ScoreAlreadySet",
+    );
+    assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).active_claims, claims_before);
+}
+
+#[test]
+fn close_sponsorship_blocked_while_booking_active() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+
+    ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
+    // Sponsor exactly one token, then book it: amount hits 0 but the booking is
+    // still cancellable, so the escrow must not be closeable yet.
+    ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
+    ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
+
+    let sp = Sponsorship::try_deserialize(
+        &mut &w.svm.get_account(&sponsorship_pda(0, 0)).unwrap().data[..],
+    )
+    .unwrap();
+    assert_eq!(sp.amount, 0);
+    assert_eq!(sp.active_bookings, 1);
+
+    err(
+        &mut w.svm,
+        close_sponsorship_ix(&sponsor.pubkey(), 0, 0),
+        &sponsor,
+        &[&sponsor],
+        "SponsorshipNotEmpty",
+    );
+    // The escrow is still alive to refund a cancellation into.
+    assert!(w.svm.get_account(&sponsor_escrow_pda(0, 0)).map(|a| !a.data.is_empty()).unwrap_or(false));
+}
+
+#[test]
+fn close_sponsorship_after_reclaim_works() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+
+    ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
+    ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
+
+    // Nothing booked: reclaim after the window empties the sponsorship.
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, reclaim_sponsorship_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
+
+    let rent_before = w.svm.get_account(&sponsor.pubkey()).map(|a| a.lamports).unwrap_or(0);
+    ok(&mut w.svm, close_sponsorship_ix(&sponsor.pubkey(), 0, 0), &sponsor, &[&sponsor]);
+
+    // Both the record and the escrow are gone, and their rent came back.
+    assert!(w.svm.get_account(&sponsorship_pda(0, 0)).map(|a| a.data.is_empty()).unwrap_or(true));
+    assert!(w.svm.get_account(&sponsor_escrow_pda(0, 0)).map(|a| a.data.is_empty()).unwrap_or(true));
+    assert!(w.svm.get_account(&sponsor.pubkey()).map(|a| a.lamports).unwrap_or(0) > rent_before);
+}
+
+#[test]
+fn proposal_to_module_flow_works() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let agent = with_role(&mut w, Role::ModuleAIAgent);
+    let voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+    let authority = w.authority.pubkey();
+
+    // A creator opens a proposal, staking the proposal deposit.
+    let staked_before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
+    ok(&mut w.svm, create_proposal_ix(&creator.pubkey(), Role::ModuleCreator, 1, 0, 10), &creator, &[&creator]);
+    assert_eq!(staked_before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Voting);
+    assert_eq!(config(&w.svm).next_proposal_id, 1);
+
+    // A single voter clears the quorum and threshold with a yes vote.
+    ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
+    assert_eq!(proposal_of(&w.svm, 0).yes_power, 10_000);
+
+    // After voting closes, anyone can finalize; the stake comes back.
+    warp_past_voting(&mut w.svm);
+    let refund_before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority), &cranker, &[&cranker]);
+    assert_eq!(balance(&w.svm, &xcav_mint(), &creator.pubkey()) - refund_before, MODULE_DEPOSIT);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
+
+    // The proposing creator claims, the agent passes review, and the module mints.
+    ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::UnderReview);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true), &agent, &[&agent]);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Approved);
+
+    ok(&mut w.svm, mint_proposed_ix(&creator.pubkey(), 0, 0), &creator, &[&creator]);
+    let m = module_of(&w.svm, 0);
+    assert_eq!(m.creator, creator.pubkey());
+    assert_eq!(m.total_token_amount, 10);
+    assert_eq!(m.sponsor_allocation, 10);
+    assert_eq!(spl_amount(&w.svm, &module_vault_pda(0)), 10);
+    assert_eq!(config(&w.svm).next_module_id, 1);
+    // The proposal record is closed once the module is created.
+    assert!(w.svm.get_account(&proposal_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
+
+    // The voter unlocks the XCAV they locked.
+    let unlock_before = balance(&w.svm, &xcav_mint(), &voter.pubkey());
+    ok(&mut w.svm, unlock_vote_ix(&voter.pubkey(), 0), &voter, &[&voter]);
+    assert_eq!(balance(&w.svm, &xcav_mint(), &voter.pubkey()) - unlock_before, 10_000);
+}
+
+#[test]
+fn sponsor_proposal_pre_sponsors_on_mint() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let agent = with_role(&mut w, Role::ModuleAIAgent);
+    let voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+    let authority = w.authority.pubkey();
+
+    // A sponsor opens a proposal, locking the stake plus the pre-sponsorship
+    // payment for two tokens (config.pre_sponsor_amount).
+    let usdc_before = balance(&w.svm, &usdc_mint(), &sponsor.pubkey());
+    ok(&mut w.svm, create_sponsor_proposal_ix(&sponsor.pubkey(), 1, 0, 10), &sponsor, &[&sponsor]);
+    assert_eq!(usdc_before - balance(&w.svm, &usdc_mint(), &sponsor.pubkey()), 2 * PER_TOKEN);
+    assert_eq!(spl_amount(&w.svm, &proposal_escrow_pda(0)), 2 * PER_TOKEN);
+    assert_eq!(proposal_of(&w.svm, 0).pre_sponsor_amount, 2);
+
+    // Pass the vote and finalize.
+    ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey(), &authority), &cranker, &[&cranker]);
+
+    // A creator claims and builds it; on mint the pre-sponsorship converts into
+    // a real sponsorship in the sponsor's name.
+    ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true), &agent, &[&agent]);
+    ok(&mut w.svm, mint_sponsored_ix(&creator.pubkey(), &sponsor.pubkey(), 0, 0, 0), &creator, &[&creator]);
+
+    let m = module_of(&w.svm, 0);
+    assert_eq!(m.creator, creator.pubkey());
+    assert_eq!(m.total_token_amount, 10);
+    assert_eq!(m.sponsor_allocation, 8);
+    assert_eq!(m.school_allocation, 2);
+
+    let sp = Sponsorship::try_deserialize(
+        &mut &w.svm.get_account(&sponsorship_pda(0, 0)).unwrap().data[..],
+    )
+    .unwrap();
+    assert_eq!(sp.sponsor, sponsor.pubkey());
+    assert_eq!(sp.amount, 2);
+    assert_eq!(sp.price_per_token, PER_TOKEN);
+    // Funds moved from the pre-sponsor escrow into the sponsorship escrow.
+    assert_eq!(spl_amount(&w.svm, &sponsor_escrow_pda(0, 0)), 2 * PER_TOKEN);
+    assert!(w.svm.get_account(&proposal_escrow_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
+    assert!(w.svm.get_account(&proposal_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
+    assert_eq!(config(&w.svm).next_sponsor_id, 1);
+}
+
+#[test]
+fn unbuilt_sponsor_proposal_expires_and_refunds() {
+    let mut w = setup();
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+    let authority = w.authority.pubkey();
+
+    // A sponsor proposal passes the vote but nobody ever builds the module.
+    let usdc_before = balance(&w.svm, &usdc_mint(), &sponsor.pubkey());
+    ok(&mut w.svm, create_sponsor_proposal_ix(&sponsor.pubkey(), 1, 0, 10), &sponsor, &[&sponsor]);
+    ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey(), &authority), &cranker, &[&cranker]);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
+
+    // Before the build deadline passes the proposal can't be expired.
+    err(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker], "BuildDeadlineNotReached");
+
+    // Once it does, anyone can expire it.
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker]);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
+
+    // The sponsor reclaims the pre-sponsorship payment in full and the records
+    // are closed.
+    ok(&mut w.svm, reclaim_pre_sponsor_ix(&sponsor.pubkey(), 0), &sponsor, &[&sponsor]);
+    assert_eq!(balance(&w.svm, &usdc_mint(), &sponsor.pubkey()), usdc_before);
+    assert!(w.svm.get_account(&proposal_escrow_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
+    assert!(w.svm.get_account(&proposal_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
 }

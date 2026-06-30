@@ -95,4 +95,34 @@ pub enum EducationError {
     /// A module cannot be removed while tokens remain in circulation.
     #[msg("Cannot remove a module with active tokens")]
     CannotRemoveModuleWithActiveTokens,
+    /// The proposer's role is not allowed to open proposals.
+    #[msg("Role cannot open proposals")]
+    InvalidProposalRole,
+    /// The vote lock is below the configured minimum.
+    #[msg("Vote is below the minimum voting amount")]
+    BelowMinimumVotingAmount,
+    /// The proposal's voting window has already closed.
+    #[msg("Proposal voting has ended")]
+    ProposalExpired,
+    /// The proposal's voting window is still open.
+    #[msg("Proposal voting is still ongoing")]
+    VotingStillOngoing,
+    /// The proposal is not in the state this action requires.
+    #[msg("Proposal is in the wrong state")]
+    InvalidProposalState,
+    /// Only the proposing creator may build a creator-opened proposal.
+    #[msg("Only the proposer may build this proposal")]
+    NotProposalCreator,
+    /// The creator was banned from this proposal after failing review twice.
+    #[msg("Creator is banned from this proposal")]
+    CreatorBanned,
+    /// The proposal cannot be cleared yet.
+    #[msg("Proposal is not clearable")]
+    ProposalNotClearable,
+    /// The sponsorship still has tokens left to book.
+    #[msg("Sponsorship is not yet empty")]
+    SponsorshipNotEmpty,
+    /// The proposal's build deadline has not yet passed.
+    #[msg("Proposal build deadline has not passed")]
+    BuildDeadlineNotReached,
 }

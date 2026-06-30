@@ -7,7 +7,7 @@ use crate::constants::{
 };
 use crate::error::EducationError;
 use crate::state::{Booking, Config, Module, Sponsorship};
-use crate::vault::{lock_to_vault, release_from_vault};
+use crate::vault::{close_vault_account, lock_to_vault, release_from_vault};
 
 use xcavate_roles::state::{Role, RoleAccount};
 
@@ -160,6 +160,12 @@ pub fn book_module_handler(
         .amount
         .checked_sub(1)
         .ok_or(EducationError::Underflow)?;
+    ctx.accounts.sponsorship.active_bookings = ctx
+        .accounts
+        .sponsorship
+        .active_bookings
+        .checked_add(1)
+        .ok_or(EducationError::Overflow)?;
 
     let module = &mut ctx.accounts.module;
     module.school_allocation = module
@@ -242,6 +248,25 @@ pub struct FinishBooking<'info> {
     )]
     pub booking: Box<Account<'info, Booking>>,
 
+    /// The booking's payment escrow, drained when the score landed. Closed here
+    /// so its rent goes back to the school that opened it.
+    #[account(
+        mut,
+        seeds = [BOOK_ESCROW_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
+        bump,
+        token::authority = config,
+    )]
+    pub booking_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The sponsorship this booking drew from; its in-flight count drops as the
+    /// booking settles here.
+    #[account(
+        mut,
+        seeds = [SPONSORSHIP_SEED, &module_id.to_le_bytes(), &booking.sponsor_id.to_le_bytes()],
+        bump = sponsorship.bump,
+    )]
+    pub sponsorship: Box<Account<'info, Sponsorship>>,
+
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -255,6 +280,13 @@ pub fn finish_booking_handler(
         EducationError::NoTestResultsSubmitted
     );
 
+    ctx.accounts.sponsorship.active_bookings = ctx
+        .accounts
+        .sponsorship
+        .active_bookings
+        .checked_sub(1)
+        .ok_or(EducationError::Underflow)?;
+
     release_from_vault(
         &ctx.accounts.token_program.to_account_info(),
         &ctx.accounts.vault.to_account_info(),
@@ -264,6 +296,16 @@ pub fn finish_booking_handler(
         ctx.accounts.config.bump,
         ctx.accounts.booking.deposit,
         ctx.accounts.xcav_mint.decimals,
+    )?;
+
+    // The escrow was emptied by the payout, so its rent can go back to the
+    // school along with the closed booking record.
+    close_vault_account(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.booking_escrow.to_account_info(),
+        &ctx.accounts.school.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        ctx.accounts.config.bump,
     )?;
 
     emit!(BookingFinished {

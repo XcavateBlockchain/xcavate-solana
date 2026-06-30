@@ -1,8 +1,11 @@
 use anchor_lang::prelude::*;
 
+use xcavate_roles::state::Role;
+
 /// Singleton config holding every protocol parameter and the authority.
 ///
-/// Deposits are denominated in XCAV and escrowed in the vault.
+/// Deposits, proposal stakes, and votes are denominated in XCAV and escrowed in
+/// the vault.
 /// Module payments are made in one of the `accepted_assets` (stablecoin) mints;
 /// prices are quoted in whole currency units and scaled to each asset's decimals
 /// at the point of payment.
@@ -53,6 +56,23 @@ pub struct Config {
     /// Successful deliveries that retire one strike.
     pub deliveries_per_strike_reduction: u32,
 
+    /// XCAV locked when opening a module proposal, returned if it passes and
+    /// slashed if it fails.
+    pub proposal_deposit: u64,
+    /// Minimum XCAV a voter must lock to cast a vote on a proposal.
+    pub minimum_voting_amount: u64,
+    /// Seconds a proposal stays open for voting.
+    pub voting_period: i64,
+    /// Approval threshold in basis points (yes / (yes + no)).
+    pub threshold_bps: u16,
+    /// Minimum total voting power for a proposal to count.
+    pub quorum: u64,
+    /// Tokens auto-sponsored for the proposer of a sponsor-opened proposal once
+    /// its module is created. Zero disables the auto-sponsorship.
+    pub pre_sponsor_amount: u64,
+    /// Seconds a passed proposal has to be built before it can be expired.
+    pub claim_period: i64,
+
     /// Accepted payment mints (stablecoins). A zeroed key is an unused slot.
     pub accepted_assets: [Pubkey; 3],
 
@@ -60,6 +80,7 @@ pub struct Config {
     pub next_module_id: u64,
     pub next_sponsor_id: u64,
     pub next_booking_id: u64,
+    pub next_proposal_id: u64,
 
     pub bump: u8,
 }
@@ -125,6 +146,10 @@ pub struct Sponsorship {
     pub payment_asset: Pubkey,
     /// Tokens still bookable from this sponsorship.
     pub amount: u64,
+    /// Bookings made from this sponsorship that haven't settled yet. A booking
+    /// can be cancelled (returning its payment to this escrow) until it's
+    /// finished, so the escrow must stay open while this is non-zero.
+    pub active_bookings: u32,
     /// Full price (base + fees) locked per token, in `payment_asset` units.
     pub price_per_token: u64,
     pub sponsored_at: i64,
@@ -196,6 +221,121 @@ pub struct Cancellation {
     pub bump: u8,
 }
 
+/// How a voter sided on a module proposal.
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModuleVote {
+    Yes,
+    No,
+    Abstain,
+}
+
+/// Where a module proposal is in its lifecycle.
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProposalStatus {
+    /// Open for voting.
+    Voting,
+    /// Passed the vote; a creator can now claim it and upload the content.
+    Claimable,
+    /// Claimed and uploaded; waiting on the AI agent's review.
+    UnderReview,
+    /// The review passed; the claimant can mint the module.
+    Approved,
+    /// The module has been created (terminal).
+    Created,
+    /// The vote failed (terminal; lingers until cleared).
+    Rejected,
+}
+
+/// A community proposal to open a learning module. Anyone holding one of the
+/// participant roles can propose; anyone at all can vote by locking XCAV. Once a
+/// proposal passes, a creator claims it, uploads the content, and an AI agent
+/// reviews it before the module is minted.
+///
+/// The pricing (`price` and the fee splits) is snapshotted at proposal time so
+/// the module is created on the terms it was voted on, even if config changes in
+/// the meantime.
+#[account]
+#[derive(InitSpace)]
+pub struct ModuleProposal {
+    pub proposal_id: u64,
+    pub proposer: Pubkey,
+    /// The role the proposer opened this under (one of creator, sponsor, school,
+    /// or lecturer). A creator-opened proposal can only be built by that creator.
+    pub proposer_role: Role,
+    pub region: u16,
+    pub status: ProposalStatus,
+    pub created_at: i64,
+    /// When voting closes.
+    pub expiry: i64,
+    /// The proposer's XCAV stake held in the vault.
+    pub deposit: u64,
+
+    pub yes_power: u64,
+    pub no_power: u64,
+    pub abstain_power: u64,
+
+    /// Tokens the module will be fractionalized into once created.
+    pub module_amount: u64,
+    /// Snapshot of the base price and fee splits at proposal time.
+    pub price: u64,
+    pub content_creator_bps: u16,
+    pub regional_operator_bps: u16,
+    pub protocol_bps: u16,
+    pub dbs_bps: u16,
+
+    /// The creator currently building it (under review, or pending a retry).
+    pub claimant: Option<Pubkey>,
+    /// AI-review failures by the current claimant (banned at two).
+    pub claimant_failures: u8,
+    /// Creators banned from this proposal after failing review twice.
+    #[max_len(8)]
+    pub banned: Vec<Pubkey>,
+    /// Deadline for a passed proposal to be built. If the module isn't created
+    /// by then the proposal can be expired and rejected so its rent and any
+    /// pre-sponsorship are recoverable. Zero until the proposal passes.
+    pub build_deadline: i64,
+
+    /// For a sponsor-opened proposal: the asset and per-token price of the
+    /// auto-sponsorship locked up front, converted to a real sponsorship when
+    /// the module is created.
+    pub payment_asset: Pubkey,
+    pub pre_sponsor_amount: u64,
+    pub pre_sponsor_price_per_token: u64,
+
+    #[max_len(200)]
+    pub metadata: String,
+    /// The content uri uploaded by the claimant for review.
+    #[max_len(200)]
+    pub content_uri: String,
+    pub bump: u8,
+}
+
+impl ModuleProposal {
+    pub const METADATA_MAX_LEN: usize = 200;
+    pub const URI_MAX_LEN: usize = 200;
+    pub const MAX_BANNED: usize = 8;
+
+    /// Total XCAV the locked pre-sponsorship escrow should hold.
+    pub fn pre_sponsor_locked(&self) -> Option<u64> {
+        self.pre_sponsor_price_per_token
+            .checked_mul(self.pre_sponsor_amount)
+    }
+}
+
+/// One voter's locked vote on a proposal. The XCAV stake sits in the vault and
+/// is returned when the voter unlocks. `expiry` is copied from the proposal so
+/// unlocking never needs the proposal account.
+#[account]
+#[derive(InitSpace)]
+pub struct ModuleProposalVote {
+    pub proposal_id: u64,
+    pub voter: Pubkey,
+    pub vote: ModuleVote,
+    pub power: u64,
+    pub expiry: i64,
+    pub bump: u8,
+}
+
 /// Who a soulbound credential is issued to.
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CredentialKind {
@@ -226,6 +366,9 @@ pub struct Credential {
     pub module_id: u64,
     pub booking_id: u64,
     pub kind: CredentialKind,
+    /// The booking's impact score, recorded on a student's credential so it
+    /// carries their individual result. `None` for the other credential kinds.
+    pub score: Option<u16>,
     pub issued_at: i64,
     #[max_len(200)]
     pub uri: String,

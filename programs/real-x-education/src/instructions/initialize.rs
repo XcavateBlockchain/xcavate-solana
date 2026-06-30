@@ -25,6 +25,13 @@ pub struct ConfigParams {
     pub max_strikes: u8,
     pub strike_slash_bps: u16,
     pub deliveries_per_strike_reduction: u32,
+    pub proposal_deposit: u64,
+    pub minimum_voting_amount: u64,
+    pub voting_period: i64,
+    pub threshold_bps: u16,
+    pub quorum: u64,
+    pub pre_sponsor_amount: u64,
+    pub claim_period: i64,
     pub accepted_assets: [Pubkey; 3],
 }
 
@@ -39,11 +46,16 @@ impl ConfigParams {
             + (self.dbs_bps as u32);
         require!(fee_total <= 10_000, EducationError::InvalidConfig);
         require!(
-            self.strike_slash_bps <= 10_000 && self.min_impact_score_bps <= 10_000,
+            self.strike_slash_bps <= 10_000
+                && self.min_impact_score_bps <= 10_000
+                && self.threshold_bps <= 10_000,
             EducationError::InvalidConfig
         );
         require!(
-            self.sponsorship_window > 0 && self.cancellation_window > 0,
+            self.sponsorship_window > 0
+                && self.cancellation_window > 0
+                && self.voting_period > 0
+                && self.claim_period > 0,
             EducationError::InvalidConfig
         );
         require!(self.module_price > 0, EducationError::InvalidConfig);
@@ -68,6 +80,13 @@ impl ConfigParams {
         config.max_strikes = self.max_strikes;
         config.strike_slash_bps = self.strike_slash_bps;
         config.deliveries_per_strike_reduction = self.deliveries_per_strike_reduction;
+        config.proposal_deposit = self.proposal_deposit;
+        config.minimum_voting_amount = self.minimum_voting_amount;
+        config.voting_period = self.voting_period;
+        config.threshold_bps = self.threshold_bps;
+        config.quorum = self.quorum;
+        config.pre_sponsor_amount = self.pre_sponsor_amount;
+        config.claim_period = self.claim_period;
         config.accepted_assets = self.accepted_assets;
     }
 }
@@ -130,6 +149,7 @@ pub fn handler(ctx: Context<InitializeConfig>, params: ConfigParams) -> Result<(
     config.next_module_id = 0;
     config.next_sponsor_id = 0;
     config.next_booking_id = 0;
+    config.next_proposal_id = 0;
     config.bump = ctx.bumps.config;
 
     emit!(ConfigInitialized {
@@ -140,9 +160,9 @@ pub fn handler(ctx: Context<InitializeConfig>, params: ConfigParams) -> Result<(
     Ok(())
 }
 
-/// Update the protocol parameters. Authority-only. In-flight modules and
-/// bookings keep the values they were created with. The XCAV mint is fixed at
-/// initialization.
+/// Update the protocol parameters. Authority-only. In-flight modules, bookings,
+/// and proposals keep the values they were created with. The XCAV mint is fixed
+/// at initialization.
 #[derive(Accounts)]
 pub struct UpdateConfig<'info> {
     pub authority: Signer<'info>,

@@ -10,7 +10,7 @@ use crate::pricing::fee_ceil;
 use crate::state::{
     Booking, Cancellation, CancellationCounter, Config, Deliverer, Module, Sponsorship,
 };
-use crate::vault::release_from_vault;
+use crate::vault::{close_vault_account, release_from_vault};
 
 use xcavate_roles::state::{Role, RoleAccount};
 
@@ -182,13 +182,20 @@ pub fn cancel_booking_handler(
         ctx.accounts.xcav_mint.decimals,
     )?;
 
-    // The token becomes bookable from the sponsor again.
+    // The token becomes bookable from the sponsor again, and this booking no
+    // longer counts against the sponsorship.
     ctx.accounts.sponsorship.amount = ctx
         .accounts
         .sponsorship
         .amount
         .checked_add(1)
         .ok_or(EducationError::Overflow)?;
+    ctx.accounts.sponsorship.active_bookings = ctx
+        .accounts
+        .sponsorship
+        .active_bookings
+        .checked_sub(1)
+        .ok_or(EducationError::Underflow)?;
     ctx.accounts.module.school_allocation = ctx
         .accounts
         .module
@@ -226,6 +233,16 @@ pub fn cancel_booking_handler(
     cancellation.module_id = module_id;
     cancellation.created_at = clock.unix_timestamp;
     cancellation.bump = ctx.bumps.cancellation;
+
+    // The booking escrow has been drained back to the sponsor, so close it and
+    // return its rent to the school along with the closed booking record.
+    close_vault_account(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.booking_escrow.to_account_info(),
+        &ctx.accounts.school.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        config_bump,
+    )?;
 
     emit!(BookingCancelled {
         module_id,

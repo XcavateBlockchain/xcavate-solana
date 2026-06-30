@@ -1,6 +1,7 @@
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod minting;
 pub mod pricing;
 pub mod state;
 pub mod vault;
@@ -66,6 +67,15 @@ pub mod real_x_education {
         amount: u64,
     ) -> Result<()> {
         sponsor::reclaim_sponsorship_handler(ctx, module_id, sponsor_id, amount)
+    }
+
+    /// Close a fully-spent sponsorship and reclaim its rent. ModuleSponsor-only.
+    pub fn close_sponsorship(
+        ctx: Context<CloseSponsorship>,
+        module_id: u64,
+        sponsor_id: u64,
+    ) -> Result<()> {
+        sponsor::close_sponsorship_handler(ctx, module_id, sponsor_id)
     }
 
     /// Burn tokens from a module's unsponsored allocation. ModuleCreator-only.
@@ -169,5 +179,106 @@ pub mod real_x_education {
     /// ModuleDeliverer-only.
     pub fn unregister_module_deliverer(ctx: Context<UnregisterDeliverer>) -> Result<()> {
         deliverer::unregister_deliverer_handler(ctx)
+    }
+
+    /// Open a proposal to create a module under one of the participant roles.
+    pub fn create_module_proposal(
+        ctx: Context<CreateModuleProposal>,
+        role: xcavate_roles::state::Role,
+        region: u16,
+        module_amount: u64,
+        metadata: String,
+    ) -> Result<()> {
+        proposal::create_module_proposal_handler(ctx, role, region, module_amount, metadata)
+    }
+
+    /// Open a sponsor proposal and pre-fund its auto-sponsorship.
+    /// ModuleSponsor-only.
+    pub fn create_sponsor_proposal(
+        ctx: Context<CreateSponsorProposal>,
+        region: u16,
+        module_amount: u64,
+        metadata: String,
+    ) -> Result<()> {
+        proposal::create_sponsor_proposal_handler(ctx, region, module_amount, metadata)
+    }
+
+    /// Vote on an open proposal by locking XCAV. No role or KYC required.
+    pub fn vote_on_proposal(
+        ctx: Context<VoteOnProposal>,
+        proposal_id: u64,
+        vote: ModuleVote,
+        amount: u64,
+    ) -> Result<()> {
+        proposal::vote_on_proposal_handler(ctx, proposal_id, vote, amount)
+    }
+
+    /// Finalize a proposal once voting closes. Permissionless.
+    pub fn finalize_proposal(ctx: Context<FinalizeProposal>, proposal_id: u64) -> Result<()> {
+        proposal::finalize_proposal_handler(ctx, proposal_id)
+    }
+
+    /// Claim a passed proposal to build it and upload the content.
+    /// ModuleCreator-only.
+    pub fn claim_proposal(
+        ctx: Context<ClaimProposal>,
+        proposal_id: u64,
+        content_uri: String,
+    ) -> Result<()> {
+        proposal::claim_proposal_handler(ctx, proposal_id, content_uri)
+    }
+
+    /// Record the AI agent's review of a claimed proposal. ModuleAIAgent-only.
+    pub fn review_proposal(
+        ctx: Context<ReviewProposal>,
+        proposal_id: u64,
+        passed: bool,
+    ) -> Result<()> {
+        proposal::review_proposal_handler(ctx, proposal_id, passed)
+    }
+
+    /// Mint the module for an approved proposal with no pre-sponsorship.
+    /// ModuleCreator-only (the claimant).
+    pub fn mint_proposed_module(
+        ctx: Context<MintProposedModule>,
+        proposal_id: u64,
+    ) -> Result<()> {
+        proposal::mint_proposed_module_handler(ctx, proposal_id)
+    }
+
+    /// Mint the module for an approved sponsor proposal and convert the
+    /// pre-sponsorship. ModuleCreator-only (the claimant).
+    pub fn mint_sponsored_module(
+        ctx: Context<MintSponsoredModule>,
+        proposal_id: u64,
+    ) -> Result<()> {
+        proposal::mint_sponsored_module_handler(ctx, proposal_id)
+    }
+
+    /// Reclaim a voter's locked XCAV once the proposal's voting window ended.
+    pub fn unlock_proposal_vote(
+        ctx: Context<UnlockProposalVote>,
+        proposal_id: u64,
+    ) -> Result<()> {
+        proposal::unlock_proposal_vote_handler(ctx, proposal_id)
+    }
+
+    /// Refund a rejected sponsor proposal's pre-sponsorship. ModuleSponsor-only.
+    pub fn reclaim_pre_sponsor(
+        ctx: Context<ReclaimPreSponsor>,
+        proposal_id: u64,
+    ) -> Result<()> {
+        proposal::reclaim_pre_sponsor_handler(ctx, proposal_id)
+    }
+
+    /// Reject a passed proposal that wasn't built before its deadline.
+    /// Permissionless.
+    pub fn expire_proposal(ctx: Context<ExpireProposal>, proposal_id: u64) -> Result<()> {
+        proposal::expire_proposal_handler(ctx, proposal_id)
+    }
+
+    /// Close a rejected proposal and reclaim its rent. Permissionless.
+    pub fn clear_proposal(ctx: Context<ClearProposal>, proposal_id: u64) -> Result<()> {
+        proposal::clear_proposal_handler(ctx, proposal_id)
     }
 }

@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{mint_to, Mint, MintTo, TokenAccount, TokenInterface};
+use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 use crate::constants::{CONFIG_SEED, MODULE_MINT_SEED, MODULE_SEED, MODULE_VAULT_SEED, VAULT_SEED};
 use crate::error::EducationError;
+use crate::minting::{lock_module_deposit, mint_full_supply, write_module, ModuleTerms};
 use crate::state::{Config, Module};
-use crate::vault::lock_to_vault;
 
 use education_regions::state::Region;
 use xcavate_roles::state::{Role, RoleAccount};
@@ -120,69 +120,61 @@ pub fn create_module_handler(
         EducationError::InvalidConfig
     );
 
-    let clock = Clock::get()?;
-    let module_id = ctx.accounts.config.next_module_id;
-    let deposit = ctx.accounts.config.module_deposit;
-    let config_bump = ctx.accounts.config.bump;
-
-    // Lock the creator's XCAV deposit in the vault.
-    lock_to_vault(
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.creator_xcav.to_account_info(),
-        &ctx.accounts.xcav_mint.to_account_info(),
-        &ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.creator.to_account_info(),
+    let config = &ctx.accounts.config;
+    let module_id = config.next_module_id;
+    let deposit = config.module_deposit;
+    let config_bump = config.bump;
+    let now = Clock::get()?.unix_timestamp;
+    // Gather the creation terms from config up front, before it's bumped below.
+    let terms = ModuleTerms {
+        module_id,
+        creator: ctx.accounts.creator.key(),
+        region,
+        mint: ctx.accounts.module_mint.key(),
         deposit,
-        ctx.accounts.xcav_mint.decimals,
-    )?;
+        module_amount,
+        school_allocated: 0,
+        price: config.module_price,
+        content_creator_bps: config.content_creator_bps,
+        regional_operator_bps: config.regional_operator_bps,
+        protocol_bps: config.protocol_bps,
+        dbs_bps: config.dbs_bps,
+        created_at: now,
+        metadata: &metadata,
+        bump: ctx.bumps.module,
+    };
 
-    // Mint the full supply into the module vault. The config PDA is the mint
-    // authority, and the creator's share is tracked as the sponsor allocation.
-    let bump = [config_bump];
-    let signer_seeds: &[&[u8]] = &[CONFIG_SEED, &bump];
-    mint_to(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.key(),
-            MintTo {
-                mint: ctx.accounts.module_mint.to_account_info(),
-                to: ctx.accounts.module_vault.to_account_info(),
-                authority: ctx.accounts.config.to_account_info(),
-            },
-            &[signer_seeds],
-        ),
+    lock_module_deposit(
+        &ctx.accounts.token_program,
+        &ctx.accounts.creator_xcav,
+        &ctx.accounts.xcav_mint,
+        &ctx.accounts.vault,
+        &ctx.accounts.creator,
+        deposit,
+    )?;
+    // The config PDA is the mint authority; the creator's whole supply starts as
+    // their sponsor allocation.
+    mint_full_supply(
+        &ctx.accounts.token_program,
+        &ctx.accounts.module_mint,
+        &ctx.accounts.module_vault,
+        &ctx.accounts.config.to_account_info(),
+        config_bump,
         module_amount,
     )?;
 
-    let config = &mut ctx.accounts.config;
-    let module = &mut ctx.accounts.module;
-    module.module_id = module_id;
-    module.creator = ctx.accounts.creator.key();
-    module.region = region;
-    module.mint = ctx.accounts.module_mint.key();
-    module.deposit = deposit;
-    module.total_token_amount = module_amount;
-    module.sponsor_allocation = module_amount;
-    module.school_allocation = 0;
-    module.student_allocation = 0;
-    module.price = config.module_price;
-    module.content_creator_bps = config.content_creator_bps;
-    module.regional_operator_bps = config.regional_operator_bps;
-    module.protocol_bps = config.protocol_bps;
-    module.dbs_bps = config.dbs_bps;
-    module.created_at = clock.unix_timestamp;
-    module.metadata = metadata.clone();
-    module.bump = ctx.bumps.module;
-
-    config.next_module_id = module_id.checked_add(1).ok_or(EducationError::Overflow)?;
+    write_module(&mut ctx.accounts.module, &terms);
+    ctx.accounts.config.next_module_id =
+        module_id.checked_add(1).ok_or(EducationError::Overflow)?;
 
     emit!(LearningModuleCreated {
         module_id,
-        creator: module.creator,
+        creator: ctx.accounts.creator.key(),
         region,
-        mint: module.mint,
+        mint: ctx.accounts.module_mint.key(),
         token_amount: module_amount,
         metadata,
-        created_at: module.created_at,
+        created_at: now,
     });
     Ok(())
 }

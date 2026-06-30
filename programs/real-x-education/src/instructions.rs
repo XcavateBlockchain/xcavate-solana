@@ -6,6 +6,7 @@ pub mod create_module;
 pub mod credential;
 pub mod deliverer;
 pub mod initialize;
+pub mod proposal;
 pub mod score;
 pub mod sponsor;
 
@@ -17,5 +18,6 @@ pub use create_module::*;
 pub use credential::*;
 pub use deliverer::*;
 pub use initialize::*;
+pub use proposal::*;
 pub use score::*;
 pub use sponsor::*;

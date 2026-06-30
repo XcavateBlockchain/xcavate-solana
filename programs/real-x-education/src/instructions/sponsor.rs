@@ -5,7 +5,7 @@ use crate::constants::{CONFIG_SEED, MODULE_SEED, SPONSORSHIP_SEED, SPONSOR_ESCRO
 use crate::error::EducationError;
 use crate::pricing::price_per_token;
 use crate::state::{Config, Module, Sponsorship};
-use crate::vault::{lock_to_vault, release_from_vault};
+use crate::vault::{close_vault_account, lock_to_vault, release_from_vault};
 
 use xcavate_roles::state::{Role, RoleAccount};
 
@@ -137,6 +137,7 @@ pub fn sponsor_module_handler(
     sponsorship.sponsor = ctx.accounts.sponsor.key();
     sponsorship.payment_asset = ctx.accounts.payment_mint.key();
     sponsorship.amount = token_amount;
+    sponsorship.active_bookings = 0;
     sponsorship.price_per_token = per_token;
     sponsorship.sponsored_at = clock.unix_timestamp;
     sponsorship.bump = ctx.bumps.sponsorship;
@@ -299,4 +300,70 @@ pub struct SponsorshipReclaimed {
     pub sponsor: Pubkey,
     pub amount: u64,
     pub refunded: u64,
+}
+
+/// Close a fully-spent sponsorship and reclaim its rent. Only once every funded
+/// token has been booked or reclaimed (`amount == 0`) and every booking made
+/// from it has settled (`active_bookings == 0`): an unsettled booking could
+/// still be cancelled, which would need this escrow to refund into.
+#[derive(Accounts)]
+#[instruction(module_id: u64, sponsor_id: u64)]
+pub struct CloseSponsorship<'info> {
+    #[account(mut)]
+    pub sponsor: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(
+        mut,
+        close = sponsor,
+        seeds = [SPONSORSHIP_SEED, &module_id.to_le_bytes(), &sponsor_id.to_le_bytes()],
+        bump = sponsorship.bump,
+        constraint = sponsorship.sponsor == sponsor.key() @ EducationError::NoPermission,
+    )]
+    pub sponsorship: Box<Account<'info, Sponsorship>>,
+
+    #[account(
+        mut,
+        seeds = [SPONSOR_ESCROW_SEED, &module_id.to_le_bytes(), &sponsor_id.to_le_bytes()],
+        bump,
+        token::authority = config,
+    )]
+    pub sponsor_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+pub fn close_sponsorship_handler(
+    ctx: Context<CloseSponsorship>,
+    _module_id: u64,
+    _sponsor_id: u64,
+) -> Result<()> {
+    require!(
+        ctx.accounts.sponsorship.amount == 0 && ctx.accounts.sponsorship.active_bookings == 0,
+        EducationError::SponsorshipNotEmpty
+    );
+
+    close_vault_account(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.sponsor_escrow.to_account_info(),
+        &ctx.accounts.sponsor.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        ctx.accounts.config.bump,
+    )?;
+
+    emit!(SponsorshipClosed {
+        module_id: ctx.accounts.sponsorship.module_id,
+        sponsor_id: ctx.accounts.sponsorship.sponsor_id,
+        sponsor: ctx.accounts.sponsor.key(),
+    });
+    Ok(())
+}
+
+#[event]
+pub struct SponsorshipClosed {
+    pub module_id: u64,
+    pub sponsor_id: u64,
+    pub sponsor: Pubkey,
 }

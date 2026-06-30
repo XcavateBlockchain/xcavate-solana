@@ -4,7 +4,7 @@ use anchor_spl::token_interface::{burn, Burn, Mint, TokenAccount, TokenInterface
 use crate::constants::{CONFIG_SEED, MODULE_SEED, MODULE_VAULT_SEED, VAULT_SEED};
 use crate::error::EducationError;
 use crate::state::{Config, Module};
-use crate::vault::release_from_vault;
+use crate::vault::{close_vault_account, release_from_vault};
 
 use xcavate_roles::state::{Role, RoleAccount};
 
@@ -108,8 +108,8 @@ pub struct UnsponsoredTokensBurned {
 
 /// Remove a fully-retired module and refund the creator's deposit.
 /// ModuleCreator-only and limited to the creator's own module; only once every
-/// token has been burned (the vault is empty). The (now zero-supply) mint and
-/// vault accounts are left in place.
+/// token has been burned (the vault is empty). The emptied vault is closed back
+/// to the creator; the zero-supply mint is left in place.
 #[derive(Accounts)]
 #[instruction(module_id: u64)]
 pub struct RemoveModule<'info> {
@@ -160,6 +160,7 @@ pub struct RemoveModule<'info> {
     pub creator_xcav: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
+        mut,
         seeds = [MODULE_VAULT_SEED, &module_id.to_le_bytes()],
         bump,
         token::mint = module.mint,
@@ -185,6 +186,17 @@ pub fn remove_module_handler(ctx: Context<RemoveModule>, _module_id: u64) -> Res
         ctx.accounts.config.bump,
         ctx.accounts.module.deposit,
         ctx.accounts.xcav_mint.decimals,
+    )?;
+
+    // The vault is empty, so close it and return its rent to the creator. The
+    // zero-supply mint can't be closed under the classic token program, so it
+    // stays in place.
+    close_vault_account(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.module_vault.to_account_info(),
+        &ctx.accounts.creator.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        ctx.accounts.config.bump,
     )?;
 
     emit!(ModuleRemoved {

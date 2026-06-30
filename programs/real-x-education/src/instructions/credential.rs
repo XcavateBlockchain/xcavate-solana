@@ -76,12 +76,20 @@ pub fn mint_credential_handler(
         EducationError::NoTestResultsSubmitted
     );
 
+    // A student's credential carries their individual result; the sponsor,
+    // school, and lecturer attestations don't record a score.
+    let score = match kind {
+        CredentialKind::Student => ctx.accounts.booking.score,
+        _ => None,
+    };
+
     let clock = Clock::get()?;
     let credential = &mut ctx.accounts.credential;
     credential.recipient = recipient;
     credential.module_id = module_id;
     credential.booking_id = booking_id;
     credential.kind = kind;
+    credential.score = score;
     credential.issued_at = clock.unix_timestamp;
     credential.uri = uri;
     credential.bump = ctx.bumps.credential;
@@ -91,6 +99,7 @@ pub fn mint_credential_handler(
         booking_id,
         kind,
         recipient,
+        score,
     });
     Ok(())
 }
@@ -101,4 +110,5 @@ pub struct CredentialIssued {
     pub booking_id: u64,
     pub kind: CredentialKind,
     pub recipient: Pubkey,
+    pub score: Option<u16>,
 }

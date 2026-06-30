@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token_interface::{transfer_checked, TransferChecked};
+use anchor_spl::token_interface::{close_account, transfer_checked, CloseAccount, TransferChecked};
 
 use crate::constants::CONFIG_SEED;
 
@@ -58,4 +58,27 @@ pub fn release_from_vault<'info>(
         amount,
         decimals,
     )
+}
+
+/// Close an emptied program-owned token account and send its rent to `dest`.
+/// The config PDA owns these escrows, so the program signs with the config
+/// seeds. The account must hold a zero balance.
+pub fn close_vault_account<'info>(
+    token_program: &AccountInfo<'info>,
+    account: &AccountInfo<'info>,
+    dest: &AccountInfo<'info>,
+    config: &AccountInfo<'info>,
+    config_bump: u8,
+) -> Result<()> {
+    let bump = [config_bump];
+    let seeds: &[&[u8]] = &[CONFIG_SEED, &bump];
+    close_account(CpiContext::new_with_signer(
+        *token_program.key,
+        CloseAccount {
+            account: account.clone(),
+            destination: dest.clone(),
+            authority: config.clone(),
+        },
+        &[seeds],
+    ))
 }
