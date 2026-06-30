@@ -32,6 +32,7 @@ pub struct ConfigParams {
     pub quorum: u64,
     pub pre_sponsor_amount: u64,
     pub claim_period: i64,
+    pub upload_period: i64,
     pub accepted_assets: [Pubkey; 3],
 }
 
@@ -55,7 +56,8 @@ impl ConfigParams {
             self.sponsorship_window > 0
                 && self.cancellation_window > 0
                 && self.voting_period > 0
-                && self.claim_period > 0,
+                && self.claim_period > 0
+                && self.upload_period > 0,
             EducationError::InvalidConfig
         );
         require!(self.module_price > 0, EducationError::InvalidConfig);
@@ -87,6 +89,7 @@ impl ConfigParams {
         config.quorum = self.quorum;
         config.pre_sponsor_amount = self.pre_sponsor_amount;
         config.claim_period = self.claim_period;
+        config.upload_period = self.upload_period;
         config.accepted_assets = self.accepted_assets;
     }
 }

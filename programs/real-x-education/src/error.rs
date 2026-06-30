@@ -125,4 +125,7 @@ pub enum EducationError {
     /// The proposal's build deadline has not yet passed.
     #[msg("Proposal build deadline has not passed")]
     BuildDeadlineNotReached,
+    /// The reservation's upload deadline has not yet passed.
+    #[msg("Upload deadline has not passed")]
+    UploadDeadlineNotReached,
 }

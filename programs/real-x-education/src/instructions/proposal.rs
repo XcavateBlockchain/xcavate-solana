@@ -57,6 +57,8 @@ fn init_proposal_common(
     proposal.protocol_bps = config.protocol_bps;
     proposal.dbs_bps = config.dbs_bps;
     proposal.claimant = None;
+    proposal.claim_bond = 0;
+    proposal.upload_deadline = 0;
     proposal.claimant_failures = 0;
     proposal.banned = Vec::new();
     proposal.build_deadline = 0;
@@ -649,11 +651,12 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
 
 // ============================ claim ============================
 
-/// Claim a passed proposal to build it and upload the content for review. The
-/// caller must be a compliant ModuleCreator. A creator-opened proposal can only
-/// be built by its proposer; otherwise any creator may claim it, unless they've
-/// already been banned from it for failing review twice. While a claimant has a
-/// retry pending, only they can re-claim.
+/// Claim a passed proposal to reserve the right to build it, locking a bond so
+/// the reservation can't be held for free. The caller must be a compliant
+/// ModuleCreator. A creator-opened proposal can only be built by its proposer;
+/// otherwise any creator may claim it, unless they've already been banned from
+/// it for failing review twice. While a claimant has a retry pending, only they
+/// can re-claim.
 #[derive(Accounts)]
 #[instruction(proposal_id: u64)]
 pub struct ClaimProposal<'info> {
@@ -661,6 +664,26 @@ pub struct ClaimProposal<'info> {
 
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
+
+    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// The creator's XCAV account the bond is pulled from.
+    #[account(
+        mut,
+        token::mint = config.xcav_mint,
+        token::authority = creator,
+    )]
+    pub creator_xcav: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         seeds = [
@@ -680,40 +703,50 @@ pub struct ClaimProposal<'info> {
         bump = proposal.bump,
     )]
     pub proposal: Box<Account<'info, ModuleProposal>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn claim_proposal_handler(
-    ctx: Context<ClaimProposal>,
-    _proposal_id: u64,
-    content_uri: String,
-) -> Result<()> {
-    require!(
-        content_uri.len() <= ModuleProposal::URI_MAX_LEN,
-        EducationError::InvalidConfig
-    );
+pub fn claim_proposal_handler(ctx: Context<ClaimProposal>, _proposal_id: u64) -> Result<()> {
     require!(
         ctx.accounts.proposal.status == ProposalStatus::Claimable,
         EducationError::InvalidProposalState
     );
 
     let creator = ctx.accounts.creator.key();
+    let bond = ctx.accounts.config.module_deposit;
+    let upload_period = ctx.accounts.config.upload_period;
+    let now = Clock::get()?.unix_timestamp;
+
+    {
+        let proposal = &ctx.accounts.proposal;
+        // A creator-opened proposal is reserved for its proposer.
+        if proposal.proposer_role == Role::ModuleCreator {
+            require!(proposal.proposer == creator, EducationError::NotProposalCreator);
+        }
+        match proposal.claimant {
+            // A retry is pending: only the same claimant may pick it back up.
+            Some(pending) => require!(pending == creator, EducationError::NotProposalCreator),
+            // A fresh claim: the creator must not have been banned from it.
+            None => require!(!proposal.banned.contains(&creator), EducationError::CreatorBanned),
+        }
+    }
+
+    // Lock the build bond before recording the reservation.
+    lock_module_deposit(
+        &ctx.accounts.token_program,
+        &ctx.accounts.creator_xcav,
+        &ctx.accounts.xcav_mint,
+        &ctx.accounts.vault,
+        &ctx.accounts.creator,
+        bond,
+    )?;
+
     let proposal = &mut ctx.accounts.proposal;
-
-    // A creator-opened proposal is reserved for its proposer.
-    if proposal.proposer_role == Role::ModuleCreator {
-        require!(proposal.proposer == creator, EducationError::NotProposalCreator);
-    }
-
-    match proposal.claimant {
-        // A retry is pending: only the same claimant may pick it back up.
-        Some(pending) => require!(pending == creator, EducationError::NotProposalCreator),
-        // A fresh claim: the creator must not have been banned from it.
-        None => require!(!proposal.banned.contains(&creator), EducationError::CreatorBanned),
-    }
-
     proposal.claimant = Some(creator);
-    proposal.content_uri = content_uri;
-    proposal.status = ProposalStatus::UnderReview;
+    proposal.claim_bond = bond;
+    proposal.upload_deadline = now.saturating_add(upload_period);
+    proposal.status = ProposalStatus::Claimed;
 
     emit!(ProposalClaimed {
         proposal_id: proposal.proposal_id,
@@ -722,12 +755,143 @@ pub fn claim_proposal_handler(
     Ok(())
 }
 
+// ============================ upload ============================
+
+/// Upload the content for a reserved proposal and send it for review. Only the
+/// reserving claimant may upload. The deposit keeps riding with the proposal:
+/// it's returned only when the finished module is removed, and forfeit if the
+/// build fails or stalls, so there's no token movement here.
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct UploadProposal<'info> {
+    pub claimant: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [MODULE_PROPOSAL_SEED, &proposal_id.to_le_bytes()],
+        bump = proposal.bump,
+    )]
+    pub proposal: Box<Account<'info, ModuleProposal>>,
+}
+
+pub fn upload_proposal_handler(
+    ctx: Context<UploadProposal>,
+    _proposal_id: u64,
+    content_uri: String,
+) -> Result<()> {
+    require!(
+        content_uri.len() <= ModuleProposal::URI_MAX_LEN,
+        EducationError::InvalidConfig
+    );
+    require!(
+        ctx.accounts.proposal.status == ProposalStatus::Claimed,
+        EducationError::InvalidProposalState
+    );
+    require!(
+        ctx.accounts.proposal.claimant == Some(ctx.accounts.claimant.key()),
+        EducationError::NotProposalCreator
+    );
+
+    let proposal = &mut ctx.accounts.proposal;
+    // No longer waiting on an upload; the review is what moves it next.
+    proposal.upload_deadline = 0;
+    proposal.content_uri = content_uri;
+    proposal.status = ProposalStatus::UnderReview;
+
+    emit!(ProposalUploaded {
+        proposal_id: proposal.proposal_id,
+        claimant: ctx.accounts.claimant.key(),
+    });
+    Ok(())
+}
+
+/// Release a reservation whose upload deadline passed, slashing the bond to the
+/// treasury and reopening the proposal so another creator can build it.
+/// Permissionless.
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct ReleaseClaim<'info> {
+    pub cranker: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The treasury; receives the slashed bond.
+    #[account(mut, address = config.treasury @ EducationError::InvalidTreasury)]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [MODULE_PROPOSAL_SEED, &proposal_id.to_le_bytes()],
+        bump = proposal.bump,
+    )]
+    pub proposal: Box<Account<'info, ModuleProposal>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+pub fn release_claim_handler(ctx: Context<ReleaseClaim>, proposal_id: u64) -> Result<()> {
+    require!(
+        ctx.accounts.proposal.status == ProposalStatus::Claimed,
+        EducationError::InvalidProposalState
+    );
+    let now = Clock::get()?.unix_timestamp;
+    require!(
+        now >= ctx.accounts.proposal.upload_deadline,
+        EducationError::UploadDeadlineNotReached
+    );
+
+    let bond = ctx.accounts.proposal.claim_bond;
+    let config_bump = ctx.accounts.config.bump;
+    let decimals = ctx.accounts.xcav_mint.decimals;
+
+    // Slash the abandoned reservation's bond to the treasury.
+    if bond > 0 {
+        release_from_vault(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.xcav_mint.to_account_info(),
+            &ctx.accounts.treasury.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            config_bump,
+            bond,
+            decimals,
+        )?;
+    }
+
+    let proposal = &mut ctx.accounts.proposal;
+    proposal.claimant = None;
+    proposal.claim_bond = 0;
+    proposal.upload_deadline = 0;
+    proposal.status = ProposalStatus::Claimable;
+
+    emit!(ProposalClaimReleased {
+        proposal_id,
+        bond,
+    });
+    Ok(())
+}
+
 // ============================ review ============================
 
 /// Record the AI agent's review of a claimed proposal. ModuleAIAgent-only. A
-/// pass moves the proposal to approved so the claimant can mint it. A fail sends
-/// it back to claimable for the same creator to retry; on a second failure that
-/// creator is banned and the proposal reopens to any creator.
+/// pass moves the proposal to approved so the claimant can mint it. A first fail
+/// sends it back for the same creator to re-upload, with their deposit still
+/// riding. On a second fail that deposit is slashed to the treasury and the
+/// creator is banned and the proposal reopens to anyone else, or is rejected
+/// outright once the ban list is full.
 #[derive(Accounts)]
 #[instruction(proposal_id: u64)]
 pub struct ReviewProposal<'info> {
@@ -735,6 +899,23 @@ pub struct ReviewProposal<'info> {
 
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
+
+    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// The vault the failed claimant's deposit is slashed from.
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The treasury; receives a slashed deposit on a final failure.
+    #[account(mut, address = config.treasury @ EducationError::InvalidTreasury)]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         seeds = [
@@ -754,6 +935,8 @@ pub struct ReviewProposal<'info> {
         bump = proposal.bump,
     )]
     pub proposal: Box<Account<'info, ModuleProposal>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 pub fn review_proposal_handler(
@@ -765,28 +948,56 @@ pub fn review_proposal_handler(
         ctx.accounts.proposal.status == ProposalStatus::UnderReview,
         EducationError::InvalidProposalState
     );
-    let proposal = &mut ctx.accounts.proposal;
-    let claimant = proposal.claimant.ok_or(EducationError::NotProposalCreator)?;
+    let claimant = ctx
+        .accounts
+        .proposal
+        .claimant
+        .ok_or(EducationError::NotProposalCreator)?;
 
     let mut banned = false;
     if passed {
-        proposal.status = ProposalStatus::Approved;
-    } else {
+        ctx.accounts.proposal.status = ProposalStatus::Approved;
+    } else if ctx.accounts.proposal.claimant_failures.saturating_add(1) < 2 {
+        // First failure: the same claimant keeps the slot and the riding deposit,
+        // and gets a fresh window to re-upload.
+        let now = Clock::get()?.unix_timestamp;
+        let upload_period = ctx.accounts.config.upload_period;
+        let proposal = &mut ctx.accounts.proposal;
         proposal.claimant_failures = proposal.claimant_failures.saturating_add(1);
-        if proposal.claimant_failures >= 2 {
-            // Two strikes: ban this creator and reopen to anyone else.
-            require!(
-                proposal.banned.len() < ModuleProposal::MAX_BANNED,
-                EducationError::Overflow
-            );
-            proposal.banned.push(claimant);
-            proposal.claimant = None;
-            proposal.claimant_failures = 0;
-            banned = true;
+        proposal.upload_deadline = now.saturating_add(upload_period);
+        proposal.status = ProposalStatus::Claimed;
+    } else {
+        // Second failure: slash the deposit to the treasury and drop the
+        // claimant. Ban them and reopen to others if there's room; once the ban
+        // list is full the proposal has burned through too many creators, so
+        // reject it instead of stalling.
+        let bond = ctx.accounts.proposal.claim_bond;
+        let config_bump = ctx.accounts.config.bump;
+        let decimals = ctx.accounts.xcav_mint.decimals;
+        if bond > 0 {
+            release_from_vault(
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.vault.to_account_info(),
+                &ctx.accounts.xcav_mint.to_account_info(),
+                &ctx.accounts.treasury.to_account_info(),
+                &ctx.accounts.config.to_account_info(),
+                config_bump,
+                bond,
+                decimals,
+            )?;
         }
-        // Either way it's claimable again; on a first failure the same claimant
-        // keeps the slot for one more attempt.
-        proposal.status = ProposalStatus::Claimable;
+        let proposal = &mut ctx.accounts.proposal;
+        proposal.claim_bond = 0;
+        proposal.claimant = None;
+        proposal.claimant_failures = 0;
+        proposal.upload_deadline = 0;
+        if proposal.banned.len() < ModuleProposal::MAX_BANNED {
+            proposal.banned.push(claimant);
+            proposal.status = ProposalStatus::Claimable;
+            banned = true;
+        } else {
+            proposal.status = ProposalStatus::Rejected;
+        }
     }
 
     emit!(ProposalReviewed {
@@ -801,8 +1012,9 @@ pub fn review_proposal_handler(
 // ============================ mint ============================
 
 /// Mint the module for an approved proposal that carries no pre-sponsorship. The
-/// claimant locks the module deposit, the full supply is minted into the module
-/// vault, and the proposal record is closed back to the proposer.
+/// deposit locked at claim time becomes the module's deposit, the full supply is
+/// minted into the module vault, and the proposal record is closed back to the
+/// proposer.
 #[derive(Accounts)]
 #[instruction(proposal_id: u64)]
 pub struct MintProposedModule<'info> {
@@ -836,25 +1048,6 @@ pub struct MintProposedModule<'info> {
         constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
-
-    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
-    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
-
-    #[account(
-        mut,
-        token::mint = config.xcav_mint,
-        token::authority = creator,
-    )]
-    pub creator_xcav: Box<InterfaceAccount<'info, TokenAccount>>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_SEED],
-        bump,
-        token::mint = config.xcav_mint,
-        token::authority = config,
-    )]
-    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         init,
@@ -910,18 +1103,11 @@ pub fn mint_proposed_module_handler(
 
     let now = Clock::get()?.unix_timestamp;
     let module_id = ctx.accounts.config.next_module_id;
-    let deposit = ctx.accounts.config.module_deposit;
+    // The deposit was already locked at claim time and rides on the proposal.
+    let deposit = ctx.accounts.proposal.claim_bond;
     let config_bump = ctx.accounts.config.bump;
     let module_amount = ctx.accounts.proposal.module_amount;
 
-    lock_module_deposit(
-        &ctx.accounts.token_program,
-        &ctx.accounts.creator_xcav,
-        &ctx.accounts.xcav_mint,
-        &ctx.accounts.vault,
-        &ctx.accounts.creator,
-        deposit,
-    )?;
     mint_full_supply(
         &ctx.accounts.token_program,
         &ctx.accounts.module_mint,
@@ -995,25 +1181,6 @@ pub struct MintSponsoredModule<'info> {
         constraint = creator_role.is_compliant() @ EducationError::NotCompliant,
     )]
     pub creator_role: Box<Account<'info, RoleAccount>>,
-
-    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
-    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
-
-    #[account(
-        mut,
-        token::mint = config.xcav_mint,
-        token::authority = creator,
-    )]
-    pub creator_xcav: Box<InterfaceAccount<'info, TokenAccount>>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_SEED],
-        bump,
-        token::mint = config.xcav_mint,
-        token::authority = config,
-    )]
-    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         init,
@@ -1103,7 +1270,8 @@ pub fn mint_sponsored_module_handler(
     let now = Clock::get()?.unix_timestamp;
     let module_id = ctx.accounts.config.next_module_id;
     let sponsor_id = ctx.accounts.config.next_sponsor_id;
-    let deposit = ctx.accounts.config.module_deposit;
+    // The deposit was already locked at claim time and rides on the proposal.
+    let deposit = ctx.accounts.proposal.claim_bond;
     let config_bump = ctx.accounts.config.bump;
     let module_amount = ctx.accounts.proposal.module_amount;
     let pre_sponsor_amount = ctx.accounts.proposal.pre_sponsor_amount;
@@ -1115,14 +1283,6 @@ pub fn mint_sponsored_module_handler(
         .ok_or(EducationError::Overflow)?;
     let decimals = ctx.accounts.payment_mint.decimals;
 
-    lock_module_deposit(
-        &ctx.accounts.token_program,
-        &ctx.accounts.creator_xcav,
-        &ctx.accounts.xcav_mint,
-        &ctx.accounts.vault,
-        &ctx.accounts.creator,
-        deposit,
-    )?;
     mint_full_supply(
         &ctx.accounts.token_program,
         &ctx.accounts.module_mint,
@@ -1304,12 +1464,33 @@ pub fn unlock_proposal_vote_handler(
 
 /// Expire a passed proposal that wasn't built in time, rejecting it so its rent
 /// and any pre-sponsorship can be recovered. Permissionless. Covers every way a
-/// build can stall: nobody claims it, the claimant abandons a retry, the review
-/// never lands, or the claimant never mints after it's approved.
+/// build can stall: nobody claims it, the claimant abandons it, the review never
+/// lands, or the claimant never mints after it's approved. Any deposit still
+/// riding on the proposal is slashed to the treasury.
 #[derive(Accounts)]
 #[instruction(proposal_id: u64)]
 pub struct ExpireProposal<'info> {
     pub cranker: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// The vault a riding deposit is slashed from.
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The treasury; receives a slashed deposit.
+    #[account(mut, address = config.treasury @ EducationError::InvalidTreasury)]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -1317,25 +1498,50 @@ pub struct ExpireProposal<'info> {
         bump = proposal.bump,
     )]
     pub proposal: Box<Account<'info, ModuleProposal>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 pub fn expire_proposal_handler(ctx: Context<ExpireProposal>, proposal_id: u64) -> Result<()> {
-    let proposal = &mut ctx.accounts.proposal;
     // Only a passed-but-unbuilt proposal can be expired; voting, created, and
     // already-rejected proposals are left alone.
     require!(
         matches!(
-            proposal.status,
-            ProposalStatus::Claimable | ProposalStatus::UnderReview | ProposalStatus::Approved
+            ctx.accounts.proposal.status,
+            ProposalStatus::Claimable
+                | ProposalStatus::Claimed
+                | ProposalStatus::UnderReview
+                | ProposalStatus::Approved
         ),
         EducationError::InvalidProposalState
     );
     let now = Clock::get()?.unix_timestamp;
     require!(
-        now >= proposal.build_deadline,
+        now >= ctx.accounts.proposal.build_deadline,
         EducationError::BuildDeadlineNotReached
     );
 
+    // Slash whatever deposit a claimant still has riding on the build.
+    let bond = ctx.accounts.proposal.claim_bond;
+    let config_bump = ctx.accounts.config.bump;
+    let decimals = ctx.accounts.xcav_mint.decimals;
+    if bond > 0 {
+        release_from_vault(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.xcav_mint.to_account_info(),
+            &ctx.accounts.treasury.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            config_bump,
+            bond,
+            decimals,
+        )?;
+    }
+
+    let proposal = &mut ctx.accounts.proposal;
+    proposal.claim_bond = 0;
+    proposal.claimant = None;
+    proposal.upload_deadline = 0;
     proposal.status = ProposalStatus::Rejected;
 
     emit!(ProposalExpired { proposal_id });
@@ -1500,6 +1706,18 @@ pub struct ProposalFinalized {
 pub struct ProposalClaimed {
     pub proposal_id: u64,
     pub creator: Pubkey,
+}
+
+#[event]
+pub struct ProposalUploaded {
+    pub proposal_id: u64,
+    pub claimant: Pubkey,
+}
+
+#[event]
+pub struct ProposalClaimReleased {
+    pub proposal_id: u64,
+    pub bond: u64,
 }
 
 #[event]

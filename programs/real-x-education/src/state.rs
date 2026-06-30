@@ -72,6 +72,9 @@ pub struct Config {
     pub pre_sponsor_amount: u64,
     /// Seconds a passed proposal has to be built before it can be expired.
     pub claim_period: i64,
+    /// Seconds a creator has to upload after reserving a proposal, before the
+    /// reservation can be released and its bond slashed.
+    pub upload_period: i64,
 
     /// Accepted payment mints (stablecoins). A zeroed key is an unused slot.
     pub accepted_assets: [Pubkey; 3],
@@ -234,9 +237,13 @@ pub enum ModuleVote {
 pub enum ProposalStatus {
     /// Open for voting.
     Voting,
-    /// Passed the vote; a creator can now claim it and upload the content.
+    /// Passed the vote; a creator can now claim it to reserve the build.
     Claimable,
-    /// Claimed and uploaded; waiting on the AI agent's review.
+    /// Reserved by a creator who has locked the build bond but not yet uploaded
+    /// the content. Releases back to claimable (slashing the bond) if they miss
+    /// the upload deadline.
+    Claimed,
+    /// Content uploaded; waiting on the AI agent's review.
     UnderReview,
     /// The review passed; the claimant can mint the module.
     Approved,
@@ -283,8 +290,16 @@ pub struct ModuleProposal {
     pub protocol_bps: u16,
     pub dbs_bps: u16,
 
-    /// The creator currently building it (under review, or pending a retry).
+    /// The creator currently building it (reserved, under review, or pending a
+    /// retry).
     pub claimant: Option<Pubkey>,
+    /// XCAV bond the current claimant locked when reserving the build, refunded
+    /// when they upload and slashed if they let the upload deadline pass. Zero
+    /// when no reservation is held.
+    pub claim_bond: u64,
+    /// When the current reservation must have uploaded by; after this anyone can
+    /// release the claim and slash the bond.
+    pub upload_deadline: i64,
     /// AI-review failures by the current claimant (banned at two).
     pub claimant_failures: u8,
     /// Creators banned from this proposal after failing review twice.

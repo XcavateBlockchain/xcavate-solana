@@ -305,6 +305,7 @@ fn default_params() -> ConfigParams {
         quorum: 10_000,
         pre_sponsor_amount: 2,
         claim_period: 1_000,
+        upload_period: 1_000,
         accepted_assets: [usdc_mint(), Pubkey::default(), Pubkey::default()],
     }
 }
@@ -615,26 +616,63 @@ fn finalize_proposal_ix(cranker: &Pubkey, proposal_id: u64, proposer: &Pubkey, a
 fn claim_proposal_ix(creator: &Pubkey, proposal_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::ClaimProposal { proposal_id, content_uri: "ipfs://c".to_string() }.data(),
+        &real_x_education::instruction::ClaimProposal { proposal_id }.data(),
         real_x_education::accounts::ClaimProposal {
             creator: *creator,
             config: config_pda(),
+            xcav_mint: xcav_mint(),
+            creator_xcav: token_acc(&xcav_mint(), creator),
+            vault: vault(),
             creator_role: role_pda(creator, Role::ModuleCreator),
+            proposal: proposal_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn upload_proposal_ix(claimant: &Pubkey, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::UploadProposal { proposal_id, content_uri: "ipfs://c".to_string() }.data(),
+        real_x_education::accounts::UploadProposal {
+            claimant: *claimant,
             proposal: proposal_pda(proposal_id),
         }
         .to_account_metas(None),
     )
 }
 
-fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool) -> Instruction {
+fn release_claim_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ReleaseClaim { proposal_id }.data(),
+        real_x_education::accounts::ReleaseClaim {
+            cranker: *cranker,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            treasury: token_acc(&xcav_mint(), authority),
+            proposal: proposal_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool, authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::ReviewProposal { proposal_id, passed }.data(),
         real_x_education::accounts::ReviewProposal {
             agent: *agent,
             config: config_pda(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            treasury: token_acc(&xcav_mint(), authority),
             agent_role: role_pda(agent, Role::ModuleAIAgent),
             proposal: proposal_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
@@ -650,9 +688,6 @@ fn mint_proposed_ix(creator: &Pubkey, proposal_id: u64, module_id: u64) -> Instr
             proposal: proposal_pda(proposal_id),
             proposer: *creator,
             creator_role: role_pda(creator, Role::ModuleCreator),
-            xcav_mint: xcav_mint(),
-            creator_xcav: token_acc(&xcav_mint(), creator),
-            vault: vault(),
             module: module_pda(module_id),
             module_mint: module_mint_pda(module_id),
             module_vault: module_vault_pda(module_id),
@@ -708,9 +743,6 @@ fn mint_sponsored_ix(
             proposal: proposal_pda(proposal_id),
             proposer: *proposer,
             creator_role: role_pda(creator, Role::ModuleCreator),
-            xcav_mint: xcav_mint(),
-            creator_xcav: token_acc(&xcav_mint(), creator),
-            vault: vault(),
             module: module_pda(module_id),
             module_mint: module_mint_pda(module_id),
             module_vault: module_vault_pda(module_id),
@@ -742,13 +774,18 @@ fn unlock_vote_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
     )
 }
 
-fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64) -> Instruction {
+fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::ExpireProposal { proposal_id }.data(),
         real_x_education::accounts::ExpireProposal {
             cranker: *cranker,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            treasury: token_acc(&xcav_mint(), authority),
             proposal: proposal_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
@@ -1077,18 +1114,28 @@ fn proposal_to_module_flow_works() {
     assert_eq!(balance(&w.svm, &xcav_mint(), &creator.pubkey()) - refund_before, MODULE_DEPOSIT);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
 
-    // The proposing creator claims, the agent passes review, and the module mints.
+    // The proposing creator reserves the build (locking the deposit), uploads
+    // the content, the agent passes review, and the module mints. The deposit
+    // stays locked the whole way and becomes the module's deposit.
+    let deposit_before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
     ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimed);
+    assert_eq!(deposit_before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
+    ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::UnderReview);
-    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true), &agent, &[&agent]);
+    assert_eq!(deposit_before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true, &authority), &agent, &[&agent]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Approved);
 
     ok(&mut w.svm, mint_proposed_ix(&creator.pubkey(), 0, 0), &creator, &[&creator]);
     let m = module_of(&w.svm, 0);
     assert_eq!(m.creator, creator.pubkey());
+    assert_eq!(m.deposit, MODULE_DEPOSIT);
     assert_eq!(m.total_token_amount, 10);
     assert_eq!(m.sponsor_allocation, 10);
     assert_eq!(spl_amount(&w.svm, &module_vault_pda(0)), 10);
+    // The deposit is still locked, now as the module's deposit.
+    assert_eq!(deposit_before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
     assert_eq!(config(&w.svm).next_module_id, 1);
     // The proposal record is closed once the module is created.
     assert!(w.svm.get_account(&proposal_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
@@ -1122,10 +1169,11 @@ fn sponsor_proposal_pre_sponsors_on_mint() {
     warp_past_voting(&mut w.svm);
     ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey(), &authority), &cranker, &[&cranker]);
 
-    // A creator claims and builds it; on mint the pre-sponsorship converts into
-    // a real sponsorship in the sponsor's name.
+    // A creator reserves, uploads, and builds it; on mint the pre-sponsorship
+    // converts into a real sponsorship in the sponsor's name.
     ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
-    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true), &agent, &[&agent]);
+    ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true, &authority), &agent, &[&agent]);
     ok(&mut w.svm, mint_sponsored_ix(&creator.pubkey(), &sponsor.pubkey(), 0, 0, 0), &creator, &[&creator]);
 
     let m = module_of(&w.svm, 0);
@@ -1165,11 +1213,11 @@ fn unbuilt_sponsor_proposal_expires_and_refunds() {
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
 
     // Before the build deadline passes the proposal can't be expired.
-    err(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker], "BuildDeadlineNotReached");
+    err(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker], "BuildDeadlineNotReached");
 
     // Once it does, anyone can expire it.
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker]);
+    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
 
     // The sponsor reclaims the pre-sponsorship payment in full and the records
@@ -1178,4 +1226,80 @@ fn unbuilt_sponsor_proposal_expires_and_refunds() {
     assert_eq!(balance(&w.svm, &usdc_mint(), &sponsor.pubkey()), usdc_before);
     assert!(w.svm.get_account(&proposal_escrow_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
     assert!(w.svm.get_account(&proposal_pda(0)).map(|a| a.data.is_empty()).unwrap_or(true));
+}
+
+#[test]
+fn abandoned_reservation_slashes_bond_and_reopens() {
+    let mut w = setup();
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let creator1 = with_role(&mut w, Role::ModuleCreator);
+    let creator2 = with_role(&mut w, Role::ModuleCreator);
+    let voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+    let authority = w.authority.pubkey();
+
+    // A school opens a proposal that passes, so any creator may build it.
+    ok(&mut w.svm, create_proposal_ix(&school.pubkey(), Role::ModuleBooker, 1, 0, 10), &school, &[&school]);
+    ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey(), &authority), &cranker, &[&cranker]);
+
+    // The first creator reserves the build, locking the bond.
+    let before = balance(&w.svm, &xcav_mint(), &creator1.pubkey());
+    ok(&mut w.svm, claim_proposal_ix(&creator1.pubkey(), 0), &creator1, &[&creator1]);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimed);
+    assert_eq!(before - balance(&w.svm, &xcav_mint(), &creator1.pubkey()), MODULE_DEPOSIT);
+
+    // The reservation can't be released until the upload deadline passes.
+    err(&mut w.svm, release_claim_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker], "UploadDeadlineNotReached");
+
+    // After it lapses, anyone can release it: the bond is slashed to the
+    // treasury and the proposal reopens.
+    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, release_claim_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker]);
+    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, MODULE_DEPOSIT);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
+    assert_eq!(proposal_of(&w.svm, 0).claimant, None);
+
+    // A different creator can now reserve it.
+    ok(&mut w.svm, claim_proposal_ix(&creator2.pubkey(), 0), &creator2, &[&creator2]);
+    assert_eq!(proposal_of(&w.svm, 0).claimant, Some(creator2.pubkey()));
+}
+
+#[test]
+fn second_review_fail_slashes_deposit_and_bans() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let agent = with_role(&mut w, Role::ModuleAIAgent);
+    let voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+    let authority = w.authority.pubkey();
+
+    ok(&mut w.svm, create_proposal_ix(&creator.pubkey(), Role::ModuleCreator, 1, 0, 10), &creator, &[&creator]);
+    ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
+    warp_past_voting(&mut w.svm);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority), &cranker, &[&cranker]);
+
+    // Claim locks the deposit; it rides through the first failed review.
+    let before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
+    ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    assert_eq!(before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
+    ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, false, &authority), &agent, &[&agent]);
+    // First fail: back to reserved with the deposit still locked, no slash.
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimed);
+    assert_eq!(before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
+
+    // Re-upload and fail again: the deposit is slashed and the creator banned.
+    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, false, &authority), &agent, &[&agent]);
+    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, MODULE_DEPOSIT);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
+    assert_eq!(proposal_of(&w.svm, 0).claimant, None);
+    assert!(proposal_of(&w.svm, 0).banned.contains(&creator.pubkey()));
+
+    // The banned creator can't re-claim.
+    err(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator], "CreatorBanned");
 }

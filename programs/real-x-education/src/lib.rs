@@ -218,14 +218,25 @@ pub mod real_x_education {
         proposal::finalize_proposal_handler(ctx, proposal_id)
     }
 
-    /// Claim a passed proposal to build it and upload the content.
-    /// ModuleCreator-only.
-    pub fn claim_proposal(
-        ctx: Context<ClaimProposal>,
+    /// Reserve a passed proposal to build it, locking a bond. ModuleCreator-only.
+    pub fn claim_proposal(ctx: Context<ClaimProposal>, proposal_id: u64) -> Result<()> {
+        proposal::claim_proposal_handler(ctx, proposal_id)
+    }
+
+    /// Upload the content for a reserved proposal and send it for review,
+    /// refunding the bond. ModuleCreator-only (the claimant).
+    pub fn upload_proposal(
+        ctx: Context<UploadProposal>,
         proposal_id: u64,
         content_uri: String,
     ) -> Result<()> {
-        proposal::claim_proposal_handler(ctx, proposal_id, content_uri)
+        proposal::upload_proposal_handler(ctx, proposal_id, content_uri)
+    }
+
+    /// Release a reservation whose upload deadline passed, slashing the bond.
+    /// Permissionless.
+    pub fn release_claim(ctx: Context<ReleaseClaim>, proposal_id: u64) -> Result<()> {
+        proposal::release_claim_handler(ctx, proposal_id)
     }
 
     /// Record the AI agent's review of a claimed proposal. ModuleAIAgent-only.
