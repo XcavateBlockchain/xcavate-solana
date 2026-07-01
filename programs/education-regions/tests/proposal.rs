@@ -1,0 +1,330 @@
+//! Region proposal lifecycle: proposing, voting, finalizing, and reclaiming or
+//! clearing state afterwards.
+
+mod common;
+use common::*;
+
+// ============================ propose ============================
+
+#[test]
+fn propose_new_region_works() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    let op_before = xcav_balance(&svm, &operator.pubkey());
+
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let acc = svm.get_account(&proposal_pda(id)).unwrap();
+    let proposal = RegionProposal::try_deserialize(&mut &acc.data[..]).unwrap();
+    assert_eq!(proposal.proposer, operator.pubkey());
+    assert_eq!(proposal.region_id, 1);
+    assert_eq!(proposal.deposit, DEPOSIT);
+    assert_eq!(proposal.yes_power, 0);
+    // Deposit moved from proposer into the vault.
+    assert_eq!(op_before - xcav_balance(&svm, &operator.pubkey()), DEPOSIT);
+    assert_eq!(vault_balance(&svm), DEPOSIT);
+    // Counter advanced.
+    assert_eq!(next_proposal_id(&svm), id + 1);
+}
+
+#[test]
+fn propose_fails_for_non_operator() {
+    let (mut svm, _operator, _authority) = setup();
+    let stranger = actor(&mut svm);
+    let id = next_proposal_id(&svm);
+    // No RegionalOperator role -> the role PDA doesn't exist.
+    fails_with(
+        &mut svm,
+        propose_ix(&stranger.pubkey(), 1, id),
+        &stranger,
+        &[&stranger],
+        "AccountNotInitialized",
+    );
+}
+
+#[test]
+fn propose_fails_for_unknown_region() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    fails_with(
+        &mut svm,
+        propose_ix(&operator.pubkey(), 99, id),
+        &operator,
+        &[&operator],
+        "InvalidRegion",
+    );
+}
+
+#[test]
+fn propose_fails_when_region_already_has_proposal() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // Second proposal for region 1 -> the region pointer already exists.
+    let id2 = next_proposal_id(&svm);
+    fails_with(
+        &mut svm,
+        propose_ix(&operator.pubkey(), 1, id2),
+        &operator,
+        &[&operator],
+        "already in use",
+    );
+}
+
+// ============================ vote ============================
+
+#[test]
+fn vote_records_power() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    let voter_before = xcav_balance(&svm, &voter.pubkey());
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+
+    let proposal = RegionProposal::try_deserialize(
+        &mut &svm.get_account(&proposal_pda(id)).unwrap().data[..],
+    )
+    .unwrap();
+    assert_eq!(proposal.yes_power, 200_000_000);
+
+    let vr_acc = svm.get_account(&vote_record_pda(id, &voter.pubkey())).unwrap();
+    let vr = VoteRecord::try_deserialize(&mut &vr_acc.data[..]).unwrap();
+    assert_eq!(vr.power, 200_000_000);
+    assert_eq!(vr.vote, Vote::Yes);
+    // Power moved from voter into the vault (on top of the proposal deposit).
+    assert_eq!(voter_before - xcav_balance(&svm, &voter.pubkey()), 200_000_000);
+    assert_eq!(vault_balance(&svm), DEPOSIT + 200_000_000);
+}
+
+#[test]
+fn vote_below_minimum_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    fails_with(
+        &mut svm,
+        vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 1),
+        &voter,
+        &[&voter],
+        "BelowMinimumVotingAmount",
+    );
+}
+
+#[test]
+fn revote_replaces_previous_vote() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    let voter_before = xcav_balance(&svm, &voter.pubkey());
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    // Change vote to No with a different amount.
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::No, 300_000_000), &voter, &[&voter]);
+
+    let proposal = RegionProposal::try_deserialize(
+        &mut &svm.get_account(&proposal_pda(id)).unwrap().data[..],
+    )
+    .unwrap();
+    assert_eq!(proposal.yes_power, 0);
+    assert_eq!(proposal.no_power, 300_000_000);
+
+    let vr = VoteRecord::try_deserialize(
+        &mut &svm.get_account(&vote_record_pda(id, &voter.pubkey())).unwrap().data[..],
+    )
+    .unwrap();
+    assert_eq!(vr.vote, Vote::No);
+    assert_eq!(vr.power, 300_000_000);
+    // Net XCAV locked equals only the new vote; the old lock was refunded.
+    assert_eq!(voter_before - xcav_balance(&svm, &voter.pubkey()), 300_000_000);
+    assert_eq!(vault_balance(&svm), DEPOSIT + 300_000_000);
+}
+
+#[test]
+fn vote_after_expiry_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    warp_past_voting(&mut svm);
+    let voter = actor(&mut svm);
+    fails_with(
+        &mut svm,
+        vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+        "ProposalExpired",
+    );
+}
+
+#[test]
+fn vote_with_insufficient_balance_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // A voter who holds more than the minimum but less than they try to lock.
+    let poor = funded(&mut svm);
+    give_xcav(&mut svm, &poor.pubkey(), 150_000_000);
+    fails_with(
+        &mut svm,
+        vote_ix(&poor.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &poor,
+        &[&poor],
+        "insufficient funds",
+    );
+}
+
+// ============================ finalize ============================
+
+#[test]
+fn finalize_passes_and_starts_auction() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+
+    let op_before = xcav_balance(&svm, &operator.pubkey());
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    let rs = region_state_of(&svm, 1);
+    assert_eq!(rs.status, RegionStatus::Auctioning);
+    assert_eq!(rs.collateral, 500_000_000); // minimum_region_deposit
+    // Deposit returned to the proposer; only the voter's lock remains in the vault.
+    assert_eq!(xcav_balance(&svm, &operator.pubkey()) - op_before, DEPOSIT);
+    assert_eq!(vault_balance(&svm), 200_000_000);
+    // Proposal account was closed.
+    assert!(svm.get_account(&proposal_pda(id)).map_or(true, |a| a.data.is_empty()));
+}
+
+#[test]
+fn finalize_rejects_and_slashes_deposit() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    // No votes -> quorum not met -> rejected.
+
+    let treasury_before = xcav_balance(&svm, &authority.pubkey());
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    let rs = region_state_of(&svm, 1);
+    assert_eq!(rs.status, RegionStatus::Rejected);
+    // Deposit slashed from the vault to the treasury.
+    assert_eq!(xcav_balance(&svm, &authority.pubkey()) - treasury_before, DEPOSIT);
+    assert_eq!(vault_balance(&svm), 0);
+}
+
+#[test]
+fn finalize_fails_while_voting_ongoing() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let cranker = funded(&mut svm);
+    fails_with(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+        "VotingStillOngoing",
+    );
+}
+
+// ============================ cleanup ============================
+
+#[test]
+fn unlock_voting_token_works() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    let voter_before = xcav_balance(&svm, &voter.pubkey());
+
+    warp_past_voting(&mut svm);
+    ok(&mut svm, unlock_ix(&voter.pubkey(), id), &voter, &[&voter]);
+
+    // Vote record closed and the locked power returned as XCAV.
+    assert!(svm.get_account(&vote_record_pda(id, &voter.pubkey())).map_or(true, |a| a.data.is_empty()));
+    assert_eq!(xcav_balance(&svm, &voter.pubkey()) - voter_before, 200_000_000);
+    // Only the proposal deposit is left in the vault.
+    assert_eq!(vault_balance(&svm), DEPOSIT);
+}
+
+#[test]
+fn unlock_fails_while_voting_ongoing() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    // Window is still open, so the lock can't be reclaimed yet.
+    fails_with(
+        &mut svm,
+        unlock_ix(&voter.pubkey(), id),
+        &voter,
+        &[&voter],
+        "VotingStillOngoing",
+    );
+}
+
+#[test]
+fn unlock_without_vote_fails() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // Someone who never voted has no vote record to unlock.
+    let stranger = actor(&mut svm);
+    warp_past_voting(&mut svm);
+    fails_with(
+        &mut svm,
+        unlock_ix(&stranger.pubkey(), id),
+        &stranger,
+        &[&stranger],
+        "AccountNotInitialized",
+    );
+}
+
+#[test]
+fn clear_region_state_after_reject() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    // No votes -> rejected on finalize.
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+
+    ok(&mut svm, clear_ix(&cranker.pubkey(), 1), &cranker, &[&cranker]);
+    assert!(svm.get_account(&region_state(1)).map_or(true, |a| a.data.is_empty()));
+}
