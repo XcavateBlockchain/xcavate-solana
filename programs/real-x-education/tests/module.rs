@@ -194,7 +194,8 @@ fn burn_unsponsored_works() {
     ok(&mut w.svm, burn_ix(&creator.pubkey(), 0, 4), &creator, &[&creator]);
     let m = module_of(&w.svm, 0);
     assert_eq!(m.sponsor_allocation, 6);
-    assert_eq!(m.total_token_amount, 6);
+    // total_token_amount records the original supply and is unaffected by burns.
+    assert_eq!(m.total_token_amount, 10);
     assert_eq!(spl_amount(&w.svm, &module_vault_pda(0)), 6);
 }
 

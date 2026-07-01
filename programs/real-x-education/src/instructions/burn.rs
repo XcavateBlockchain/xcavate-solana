@@ -83,10 +83,6 @@ pub fn burn_unsponsored_handler(
         .sponsor_allocation
         .checked_sub(amount)
         .ok_or(EducationError::Underflow)?;
-    module.total_token_amount = module
-        .total_token_amount
-        .checked_sub(amount)
-        .ok_or(EducationError::Underflow)?;
 
     emit!(UnsponsoredTokensBurned {
         module_id: module.module_id,

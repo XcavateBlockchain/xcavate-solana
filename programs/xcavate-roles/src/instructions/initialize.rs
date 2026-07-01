@@ -7,7 +7,7 @@ use crate::state::Config;
 /// Creates the singleton config and sets the sudo authority to the signer.
 ///
 /// First caller becomes the sudo authority, so run this in the same script
-/// that deploys the program — otherwise someone could claim it in between.
+/// that deploys the program, otherwise someone could claim it in between.
 /// Before mainnet, bind it to the program's upgrade authority by loading the
 /// `ProgramData` account and checking `upgrade_authority_address`.
 #[derive(Accounts)]

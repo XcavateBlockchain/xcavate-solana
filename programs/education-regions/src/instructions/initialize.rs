@@ -18,6 +18,11 @@ pub struct ConfigParams {
     pub owner_change_period: i64,
     pub threshold_bps: u16,
     pub quorum: u64,
+    pub removal_deposit: u64,
+    pub removal_voting_period: i64,
+    pub slash_amount: u64,
+    pub notice_period: i64,
+    pub allowed_strikes: u8,
 }
 
 impl ConfigParams {
@@ -39,6 +44,15 @@ impl ConfigParams {
             RegionsError::InvalidConfig
         );
         require!(self.proposal_deposit > 0, RegionsError::InvalidConfig);
+        require!(
+            self.removal_deposit > 0 && self.slash_amount > 0,
+            RegionsError::InvalidConfig
+        );
+        require!(
+            self.removal_voting_period > 0 && self.notice_period > 0,
+            RegionsError::InvalidConfig
+        );
+        require!(self.allowed_strikes > 0, RegionsError::InvalidConfig);
         Ok(())
     }
 
@@ -51,13 +65,18 @@ impl ConfigParams {
         config.owner_change_period = self.owner_change_period;
         config.threshold_bps = self.threshold_bps;
         config.quorum = self.quorum;
+        config.removal_deposit = self.removal_deposit;
+        config.removal_voting_period = self.removal_voting_period;
+        config.slash_amount = self.slash_amount;
+        config.notice_period = self.notice_period;
+        config.allowed_strikes = self.allowed_strikes;
     }
 }
 
 /// Creates the singleton config and sets the authority to the signer.
 ///
 /// First caller becomes the authority, so run this in the same script that
-/// deploys the program — otherwise someone could claim it in between. Before
+/// deploys the program, otherwise someone could claim it in between. Before
 /// mainnet, bind it to the program's upgrade authority by loading the
 /// `ProgramData` account and checking `upgrade_authority_address`.
 #[derive(Accounts)]

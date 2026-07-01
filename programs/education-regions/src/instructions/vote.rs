@@ -55,7 +55,7 @@ pub struct VoteOnRegionProposal<'info> {
 
     // init_if_needed is the natural fit for an upsert of a per-voter record: the
     // PDA is seeded by the voter, so only they can target it, and the handler
-    // fully overwrites it — there is no state an attacker could reset.
+    // fully overwrites it, so there is no state an attacker could reset.
     #[account(
         init_if_needed,
         payer = voter,

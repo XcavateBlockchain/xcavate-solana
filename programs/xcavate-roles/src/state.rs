@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 /// All roles recognised across the Xcavate protocol.
 ///
-/// A role is app-level authorization, separate from KYC/compliance — that
+/// A role is app-level authorization, separate from KYC/compliance. Compliance
 /// lives in [`AccessPermission`], and will eventually be driven by SAS
 /// attestations rather than a manually set flag.
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
@@ -44,9 +44,9 @@ impl Role {
 /// Later it'll be driven by a SAS attestation instead of a manual toggle.
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AccessPermission {
-    /// Passed KYC/AML — role-specific actions are allowed.
+    /// Passed KYC/AML, so role-specific actions are allowed.
     Compliant,
-    /// Revoked — role-specific actions are blocked.
+    /// Revoked, so role-specific actions are blocked.
     Revoked,
 }
 

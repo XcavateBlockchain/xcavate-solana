@@ -76,4 +76,51 @@ pub mod education_regions {
     pub fn clear_region_state(ctx: Context<ClearRegionState>, region_id: u16) -> Result<()> {
         cleanup::clear_region_state_handler(ctx, region_id)
     }
+
+    /// Propose removing a region's operator. Locks a dispute deposit.
+    pub fn propose_remove_operator(
+        ctx: Context<ProposeRemoveOperator>,
+        region_id: u16,
+    ) -> Result<()> {
+        removal::propose_remove_operator_handler(ctx, region_id)
+    }
+
+    /// Vote on an open operator-removal proposal. Anyone may vote.
+    pub fn vote_on_removal(
+        ctx: Context<VoteOnRemoval>,
+        region_id: u16,
+        vote: Vote,
+        amount: u64,
+    ) -> Result<()> {
+        removal::vote_on_removal_handler(ctx, region_id, vote, amount)
+    }
+
+    /// Finalize an expired removal proposal (permissionless crank).
+    pub fn finalize_removal(ctx: Context<FinalizeRemoval>, region_id: u16) -> Result<()> {
+        removal::finalize_removal_handler(ctx, region_id)
+    }
+
+    /// Reclaim locked voting tokens after a removal proposal's window ends.
+    pub fn unlock_removal_vote(ctx: Context<UnlockRemovalVote>, proposal_id: u64) -> Result<()> {
+        removal::unlock_removal_vote_handler(ctx, proposal_id)
+    }
+
+    /// Bid to take over a region whose operator seat is open. RegionalOperator-only.
+    pub fn bid_on_replacement(
+        ctx: Context<BidOnReplacement>,
+        region_id: u16,
+        amount: u64,
+    ) -> Result<()> {
+        replacement::bid_on_replacement_handler(ctx, region_id, amount)
+    }
+
+    /// Finalize a replacement auction once it ends (permissionless crank).
+    pub fn finalize_replacement(ctx: Context<FinalizeReplacement>, region_id: u16) -> Result<()> {
+        replacement::finalize_replacement_handler(ctx, region_id)
+    }
+
+    /// Schedule the caller's own departure as a region's operator.
+    pub fn initiate_resignation(ctx: Context<InitiateResignation>, region_id: u16) -> Result<()> {
+        replacement::initiate_resignation_handler(ctx, region_id)
+    }
 }

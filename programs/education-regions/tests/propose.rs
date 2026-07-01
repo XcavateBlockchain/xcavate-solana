@@ -88,7 +88,7 @@ fn xcav_mint() -> Pubkey {
     Pubkey::new_from_array([7u8; 32])
 }
 
-/// Deterministic XCAV token account for an owner. Not a real ATA — the program
+/// Deterministic XCAV token account for an owner. Not a real ATA; the program
 /// only checks the mint and authority, so any token account works.
 fn token_acc(owner: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(&[b"xcav_token", owner.as_ref()], &rid()).0
@@ -255,6 +255,11 @@ fn default_params() -> ConfigParams {
         owner_change_period: 10_000,
         threshold_bps: 5_000,
         quorum: 100_000_000,
+        removal_deposit: DEPOSIT,
+        removal_voting_period: 1_000,
+        slash_amount: 100_000_000,
+        notice_period: 5_000,
+        allowed_strikes: 3,
     }
 }
 
@@ -1162,5 +1167,355 @@ fn update_authority_rotates() {
         update_config_ix(&new_auth.pubkey(), &authority.pubkey(), default_params()),
         &new_auth,
         &[&new_auth],
+    );
+}
+
+// ============================ owner removal / replacement ============================
+
+fn removal_proposal_pda(region_id: u16) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::REMOVAL_PROPOSAL_SEED, &region_id.to_le_bytes()],
+        &rid(),
+    )
+    .0
+}
+fn removal_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::REMOVAL_VOTE_SEED, &proposal_id.to_le_bytes(), voter.as_ref()],
+        &rid(),
+    )
+    .0
+}
+fn replacement_auction_pda(region_id: u16) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::REPLACEMENT_AUCTION_SEED, &region_id.to_le_bytes()],
+        &rid(),
+    )
+    .0
+}
+
+fn region_of(svm: &LiteSVM, region_id: u16) -> education_regions::state::Region {
+    education_regions::state::Region::try_deserialize(
+        &mut &svm.get_account(&region_pda(region_id)).unwrap().data[..],
+    )
+    .unwrap()
+}
+
+/// Advance the clock by `secs` seconds.
+fn warp(svm: &mut LiteSVM, secs: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += secs;
+    svm.set_sysvar(&clock);
+}
+
+/// Drives region 1 all the way to a created region owned by `operator` with a
+/// 600M collateral.
+fn reach_created(svm: &mut LiteSVM, operator: &Keypair, authority: &Keypair) {
+    reach_auctioning(svm, operator, authority);
+    ok(svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), operator, &[operator]);
+    warp_past_voting(svm);
+    ok(svm, create_region_ix(&operator.pubkey(), 1), operator, &[operator]);
+}
+
+fn propose_remove_ix(proposer: &Pubkey, region_id: u16) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::ProposeRemoveOperator { region_id }.data(),
+        education_regions::accounts::ProposeRemoveOperator {
+            proposer: *proposer,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            proposer_token: token_acc(proposer),
+            vault: vault(),
+            region: region_pda(region_id),
+            removal_proposal: removal_proposal_pda(region_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn vote_removal_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, vote: Vote, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::VoteOnRemoval { region_id, vote, amount }.data(),
+        education_regions::accounts::VoteOnRemoval {
+            voter: *voter,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            voter_token: token_acc(voter),
+            vault: vault(),
+            removal_proposal: removal_proposal_pda(region_id),
+            vote_record: removal_vote_pda(proposal_id, voter),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn finalize_removal_ix(cranker: &Pubkey, region_id: u16, proposer: &Pubkey, treasury_owner: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::FinalizeRemoval { region_id }.data(),
+        education_regions::accounts::FinalizeRemoval {
+            cranker: *cranker,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            region: region_pda(region_id),
+            removal_proposal: removal_proposal_pda(region_id),
+            proposer: *proposer,
+            proposer_token: token_acc(proposer),
+            treasury: token_acc(treasury_owner),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn unlock_removal_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::UnlockRemovalVote { proposal_id }.data(),
+        education_regions::accounts::UnlockRemovalVote {
+            voter: *voter,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            voter_token: token_acc(voter),
+            vault: vault(),
+            vote_record: removal_vote_pda(proposal_id, voter),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn bid_replacement_ix(bidder: &Pubkey, region_id: u16, amount: u64, previous: Option<Pubkey>) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::BidOnReplacement { region_id, amount }.data(),
+        education_regions::accounts::BidOnReplacement {
+            bidder: *bidder,
+            config: regions_config(),
+            operator_role: role_pda(bidder, Role::RegionalOperator),
+            xcav_mint: xcav_mint(),
+            bidder_token: token_acc(bidder),
+            vault: vault(),
+            region: region_pda(region_id),
+            auction: replacement_auction_pda(region_id),
+            previous_bidder_token: previous.as_ref().map(token_acc),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn finalize_replacement_ix(cranker: &Pubkey, region_id: u16, old_owner: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::FinalizeReplacement { region_id }.data(),
+        education_regions::accounts::FinalizeReplacement {
+            cranker: *cranker,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            region: region_pda(region_id),
+            auction: replacement_auction_pda(region_id),
+            old_owner_token: token_acc(old_owner),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn resign_ix(operator: &Pubkey, region_id: u16) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::InitiateResignation { region_id }.data(),
+        education_regions::accounts::InitiateResignation {
+            operator: *operator,
+            config: regions_config(),
+            operator_role: role_pda(operator, Role::RegionalOperator),
+            region: region_pda(region_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+#[test]
+fn removal_upheld_slashes_collateral_and_adds_strike() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    let challenger = new_operator(&mut svm, &authority);
+    let chal_before = xcav_balance(&svm, &challenger.pubkey());
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+
+    warp(&mut svm, 2_000);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    let region = region_of(&svm, 1);
+    // One strike, collateral down by slash_amount (100M), seat not yet open (1 < 3).
+    assert_eq!(region.active_strikes, 1);
+    assert_eq!(region.collateral, 600_000_000 - 100_000_000);
+    // Treasury received the slash; challenger's deposit was returned.
+    assert_eq!(xcav_balance(&svm, &authority.pubkey()), 100_000_000);
+    assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before);
+    // Removal proposal closed.
+    assert!(svm.get_account(&removal_proposal_pda(1)).map_or(true, |a| a.data.is_empty()));
+}
+
+#[test]
+fn removal_rejected_slashes_proposer() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    let challenger = new_operator(&mut svm, &authority);
+    let chal_before = xcav_balance(&svm, &challenger.pubkey());
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::No, 200_000_000), &voter, &[&voter]);
+
+    warp(&mut svm, 2_000);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    let region = region_of(&svm, 1);
+    // Operator untouched; challenger's deposit slashed to the treasury.
+    assert_eq!(region.active_strikes, 0);
+    assert_eq!(region.collateral, 600_000_000);
+    assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before - DEPOSIT);
+    assert_eq!(xcav_balance(&svm, &authority.pubkey()), DEPOSIT);
+}
+
+#[test]
+fn removal_reaching_ceiling_opens_seat() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    // Three upheld removals (allowed_strikes = 3) open the seat.
+    for _ in 0..3 {
+        let challenger = new_operator(&mut svm, &authority);
+        let id = next_proposal_id(&svm);
+        ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+        let voter = actor(&mut svm);
+        ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+        warp(&mut svm, 2_000);
+        let cranker = funded(&mut svm);
+        ok(
+            &mut svm,
+            finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+            &cranker,
+            &[&cranker],
+        );
+    }
+
+    let now = svm.get_sysvar::<Clock>().unix_timestamp;
+    let region = region_of(&svm, 1);
+    assert_eq!(region.active_strikes, 3);
+    // Seat is open: the owner can be changed as of now.
+    assert!(region.next_owner_change <= now);
+}
+
+#[test]
+fn unlock_removal_vote_works() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    let challenger = new_operator(&mut svm, &authority);
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+
+    let voter = actor(&mut svm);
+    let before = xcav_balance(&svm, &voter.pubkey());
+    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    assert_eq!(xcav_balance(&svm, &voter.pubkey()), before - 200_000_000);
+
+    warp(&mut svm, 2_000);
+    ok(&mut svm, unlock_removal_ix(&voter.pubkey(), id), &voter, &[&voter]);
+    assert_eq!(xcav_balance(&svm, &voter.pubkey()), before);
+}
+
+#[test]
+fn resignation_then_replacement_changes_owner() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+    let op_after_create = xcav_balance(&svm, &operator.pubkey());
+
+    // Operator gives notice; the seat opens after notice_period (5_000).
+    ok(&mut svm, resign_ix(&operator.pubkey(), 1), &operator, &[&operator]);
+    warp(&mut svm, 6_000);
+
+    // A new operator bids on the open seat.
+    let op2 = new_operator(&mut svm, &authority);
+    ok(&mut svm, bid_replacement_ix(&op2.pubkey(), 1, 600_000_000, None), &op2, &[&op2]);
+
+    warp(&mut svm, 2_000); // past the replacement auction
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_replacement_ix(&cranker.pubkey(), 1, &operator.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    let region = region_of(&svm, 1);
+    assert_eq!(region.owner, op2.pubkey());
+    assert_eq!(region.collateral, 600_000_000);
+    assert_eq!(region.active_strikes, 0);
+    // Outgoing operator's collateral was returned.
+    assert_eq!(xcav_balance(&svm, &operator.pubkey()), op_after_create + 600_000_000);
+    // Replacement auction closed.
+    assert!(svm.get_account(&replacement_auction_pda(1)).map_or(true, |a| a.data.is_empty()));
+}
+
+#[test]
+fn replacement_bid_fails_before_seat_open() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    let op2 = new_operator(&mut svm, &authority);
+    // No resignation / removal yet, so the owner-change lock is still in the future.
+    fails_with(
+        &mut svm,
+        bid_replacement_ix(&op2.pubkey(), 1, 600_000_000, None),
+        &op2,
+        &[&op2],
+        "RegionOwnerCantBeChanged",
+    );
+}
+
+#[test]
+fn resignation_requires_owner() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    let op2 = new_operator(&mut svm, &authority);
+    fails_with(
+        &mut svm,
+        resign_ix(&op2.pubkey(), 1),
+        &op2,
+        &[&op2],
+        "NotRegionOwner",
     );
 }

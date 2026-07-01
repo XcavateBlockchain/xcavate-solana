@@ -6,7 +6,7 @@ use crate::error::RegionsError;
 use crate::state::{Config, RegionProposal, RegionState, RegionStatus};
 use crate::vault::release_from_vault;
 
-/// Finalize an expired proposal. Permissionless — anyone can crank it once the
+/// Finalize an expired proposal. Permissionless: anyone can crank it once the
 /// voting window closes. If it passed (threshold + quorum) the region moves to
 /// an auction and the proposer's deposit is returned; otherwise the deposit is
 /// slashed to the treasury and the region is marked rejected.

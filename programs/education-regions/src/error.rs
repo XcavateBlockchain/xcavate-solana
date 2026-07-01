@@ -59,6 +59,15 @@ pub enum RegionsError {
     /// The region state is not in a clearable (rejected/empty) state.
     #[msg("Region state is not clearable")]
     NotClearable,
+    /// The caller is not the region's operator.
+    #[msg("Caller is not the region operator")]
+    NotRegionOwner,
+    /// The region's operator cannot be changed yet.
+    #[msg("Region operator cannot be changed yet")]
+    RegionOwnerCantBeChanged,
+    /// An earlier (or equal) owner change is already scheduled.
+    #[msg("An owner change is already scheduled")]
+    OwnerChangeAlreadyScheduled,
     /// Arithmetic overflow.
     #[msg("Arithmetic overflow")]
     Overflow,

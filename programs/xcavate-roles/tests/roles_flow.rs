@@ -1,7 +1,7 @@
 //! Behavioural tests for the roles & compliance registry.
 //!
 //! The program does no token transfers, so LiteSVM covers every path end to
-//! end — there's nothing here that needs a Surfpool integration run.
+//! end, and nothing here needs a Surfpool integration run.
 
 use anchor_lang::{
     prelude::Pubkey, solana_program::instruction::Instruction, AccountDeserialize,

@@ -56,6 +56,16 @@ pub struct Config {
     pub threshold_bps: u16,
     /// Minimum total voting power for a proposal to be valid.
     pub quorum: u64,
+    /// XCAV locked when proposing to remove a region's operator.
+    pub removal_deposit: u64,
+    /// Seconds an operator-removal proposal stays open for voting.
+    pub removal_voting_period: i64,
+    /// XCAV slashed from a region's collateral per upheld strike.
+    pub slash_amount: u64,
+    /// Notice an operator must give before resigning (seconds).
+    pub notice_period: i64,
+    /// Strikes that, once reached, open a region to a replacement auction.
+    pub allowed_strikes: u8,
     /// Monotonic id for the next proposal.
     pub proposal_counter: u64,
     pub bump: u8,
@@ -136,5 +146,54 @@ pub struct VoteRecord {
     pub vote: Vote,
     pub power: u64,
     pub expiry: i64,
+    pub bump: u8,
+}
+
+/// An open proposal to remove a region's operator, with its running vote tally.
+/// One per region (the PDA is seeded by `region_id`), so a region can only have a
+/// single removal vote in flight at a time. The proposer's `deposit` is held in
+/// the vault and returned if the proposal passes, slashed otherwise.
+#[account]
+#[derive(InitSpace)]
+pub struct RemovalProposal {
+    pub proposal_id: u64,
+    pub region_id: u16,
+    pub proposer: Pubkey,
+    pub created_at: i64,
+    pub expiry: i64,
+    pub deposit: u64,
+    pub yes_power: u64,
+    pub no_power: u64,
+    pub abstain_power: u64,
+    pub bump: u8,
+}
+
+/// One voter's vote on a removal proposal. Mirrors `VoteRecord` but is a distinct
+/// account so removal votes never collide with region-proposal votes.
+#[account]
+#[derive(InitSpace)]
+pub struct RemovalVoteRecord {
+    pub proposal_id: u64,
+    pub voter: Pubkey,
+    pub region_id: u16,
+    pub vote: Vote,
+    pub power: u64,
+    pub expiry: i64,
+    pub bump: u8,
+}
+
+/// An auction to replace a region's operator once the seat is open (after a
+/// successful removal or a resignation notice elapses). One per region. The
+/// leading bid is held in the vault and becomes the new operator's collateral.
+#[account]
+#[derive(InitSpace)]
+pub struct ReplacementAuction {
+    pub region_id: u16,
+    /// Highest bidder so far, if any. Their bid of XCAV is held in the vault.
+    pub highest_bidder: Option<Pubkey>,
+    /// Current highest bid / minimum collateral during the auction.
+    pub collateral: u64,
+    /// When the auction ends.
+    pub auction_expiry: i64,
     pub bump: u8,
 }
