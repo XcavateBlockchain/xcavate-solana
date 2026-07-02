@@ -37,11 +37,11 @@ fn full_flow_through_score_works() {
         &[&agent],
     );
 
-    // Full score: creator 20%, operator 10%, protocol 5%, lecturer base+dbs.
-    assert_eq!(balance(&w.svm, &usdc_mint(), &creator.pubkey()) - cre_before, 20_000_000);
-    assert_eq!(balance(&w.svm, &usdc_mint(), &operator) - op_before, 10_000_000);
+    // Full score: creator 8.3%, operator 8.3%, protocol 5%, lecturer base+dbs.
+    assert_eq!(balance(&w.svm, &usdc_mint(), &creator.pubkey()) - cre_before, 8_300_000);
+    assert_eq!(balance(&w.svm, &usdc_mint(), &operator) - op_before, 8_300_000);
     assert_eq!(balance(&w.svm, &usdc_mint(), &protocol) - proto_before, 5_000_000);
-    assert_eq!(balance(&w.svm, &usdc_mint(), &lecturer.pubkey()) - lec_before, 105_000_000);
+    assert_eq!(balance(&w.svm, &usdc_mint(), &lecturer.pubkey()) - lec_before, 103_400_000);
     // Escrow drained, delivered token burned.
     assert_eq!(spl_amount(&w.svm, &book_escrow_pda(0, 0)), 0);
     assert_eq!(spl_amount(&w.svm, &module_vault_pda(0)), 9);

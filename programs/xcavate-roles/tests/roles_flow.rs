@@ -371,7 +371,7 @@ fn set_permission_fails_when_already_set() {
     fails_with(&mut svm, set_perm_ix(&admin.pubkey(), &user, Role::ModuleCreator, AccessPermission::Revoked), &admin, &[&admin], "PermissionAlreadySet");
 }
 
-// ============================ update_authority (Solana-only) ============================
+// ============================ update_authority ============================
 
 #[test]
 fn update_authority_works() {
@@ -391,4 +391,67 @@ fn update_authority_fails_for_non_authority() {
     let (mut svm, _authority) = setup();
     let imposter = funded(&mut svm);
     fails_with(&mut svm, update_authority_ix(&imposter.pubkey(), imposter.pubkey()), &imposter, &[&imposter], "NotAuthority");
+}
+
+#[test]
+fn update_authority_fails_for_zero_address() {
+    let (mut svm, authority) = setup();
+    // Handing the sudo authority to the zero address would brick the registry.
+    fails_with(
+        &mut svm,
+        update_authority_ix(&authority.pubkey(), Pubkey::default()),
+        &authority,
+        &[&authority],
+        "InvalidAuthority",
+    );
+}
+
+// ============================ singleton / role isolation ============================
+
+#[test]
+fn initialize_config_fails_on_double_init() {
+    let (mut svm, authority) = setup();
+    // The config is a singleton PDA; a second init hits the existing account.
+    fails_with(&mut svm, init_ix(&authority.pubkey()), &authority, &[&authority], "already in use");
+}
+
+#[test]
+fn assign_multiple_distinct_roles_coexist() {
+    let (mut svm, _authority, admin) = setup_with_admin();
+    let user = Keypair::new().pubkey();
+
+    // Two different roles for one user live in independent PDAs (seed-byte isolation).
+    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::RegionalOperator), &admin, &[&admin]);
+    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+
+    assert_eq!(read_role(&svm, &user, Role::RegionalOperator).role, Role::RegionalOperator);
+    assert_eq!(read_role(&svm, &user, Role::ModuleCreator).role, Role::ModuleCreator);
+}
+
+#[test]
+fn reassign_role_after_removal() {
+    let (mut svm, _authority, admin) = setup_with_admin();
+    let user = Keypair::new().pubkey();
+
+    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(&mut svm, remove_role_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    // The PDA was closed; assigning again must re-create it cleanly.
+    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    assert_eq!(read_role(&svm, &user, Role::ModuleCreator).role, Role::ModuleCreator);
+}
+
+#[test]
+fn removed_admin_loses_power() {
+    let (mut svm, authority, admin) = setup_with_admin();
+    let user = Keypair::new().pubkey();
+
+    ok(&mut svm, remove_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    // With the Admin PDA closed, the ex-admin's account no longer resolves.
+    fails_with(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+        "AccountNotInitialized",
+    );
 }

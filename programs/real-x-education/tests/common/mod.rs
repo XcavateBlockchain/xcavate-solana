@@ -53,11 +53,11 @@ pub const MODULE_DEPOSIT: u64 = 1_000_000_000;
 pub const BOOKING_DEPOSIT: u64 = 500_000_000;
 pub const DELIVERER_DEPOSIT: u64 = 2_000_000_000;
 pub const MODULE_PRICE: u64 = 100; // whole units
-pub const PER_TOKEN: u64 = 140_000_000; // base 100e6 + 40% fees, at 6 decimals
+pub const PER_TOKEN: u64 = 125_000_000; // base 100e6 + 25% fees, at 6 decimals
 
 // A second payment asset with different decimals, for multi-asset coverage.
 pub const GBP_DECIMALS: u8 = 2;
-pub const PER_TOKEN_GBP: u64 = 14_000; // base 100 + 40% fees, at 2 decimals
+pub const PER_TOKEN_GBP: u64 = 12_500; // base 10_000 + 25% fees, at 2 decimals
 
 pub fn eid() -> Pubkey {
     real_x_education::id()
@@ -326,10 +326,10 @@ pub fn default_params() -> ConfigParams {
         deliverer_deposit: DELIVERER_DEPOSIT,
         module_price: MODULE_PRICE,
         max_module_tokens: 1_000,
-        content_creator_bps: 2_000,
-        regional_operator_bps: 1_000,
+        content_creator_bps: 830,
+        regional_operator_bps: 830,
         protocol_bps: 500,
-        dbs_bps: 500,
+        dbs_bps: 340,
         min_impact_score_bps: 5_000,
         sponsorship_window: 1_000,
         cancellation_window: 1_000,
@@ -1149,6 +1149,78 @@ pub fn sponsor_asset_ix(
             sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
             token_program: TOKEN_PROGRAM_ID,
             system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Book a module whose sponsorship was paid in an arbitrary accepted asset.
+pub fn book_asset_ix(
+    school: &Pubkey,
+    module_id: u64,
+    sponsor_id: u64,
+    booking_id: u64,
+    mint: &Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::BookModule { module_id, sponsor_id, metadata: "ipfs://b".to_string() }.data(),
+        real_x_education::accounts::BookModule {
+            school: *school,
+            config: config_pda(),
+            module: module_pda(module_id),
+            school_role: role_pda(school, Role::ModuleBooker),
+            xcav_mint: xcav_mint(),
+            school_xcav: token_acc(&xcav_mint(), school),
+            vault: vault(),
+            sponsorship: sponsorship_pda(module_id, sponsor_id),
+            payment_mint: *mint,
+            sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
+            booking: booking_pda(module_id, booking_id),
+            booking_escrow: book_escrow_pda(module_id, booking_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Submit a score for a booking settled in an arbitrary accepted asset.
+#[allow(clippy::too_many_arguments)]
+pub fn submit_score_asset_ix(
+    agent: &Pubkey,
+    module_id: u64,
+    booking_id: u64,
+    score: u16,
+    region: u16,
+    creator: &Pubkey,
+    operator: &Pubkey,
+    protocol: &Pubkey,
+    lecturer: &Pubkey,
+    sponsor: &Pubkey,
+    mint: &Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::SubmitImpactScore { module_id, booking_id, score }.data(),
+        real_x_education::accounts::SubmitImpactScore {
+            agent: *agent,
+            config: config_pda(),
+            module: module_pda(module_id),
+            agent_role: role_pda(agent, Role::ModuleAIAgent),
+            booking: booking_pda(module_id, booking_id),
+            region_account: region_pda(region),
+            payment_mint: *mint,
+            module_mint: module_mint_pda(module_id),
+            module_vault: module_vault_pda(module_id),
+            booking_escrow: book_escrow_pda(module_id, booking_id),
+            creator_payment: token_acc(mint, creator),
+            regional_operator_payment: token_acc(mint, operator),
+            protocol_payment: token_acc(mint, protocol),
+            lecturer_payment: token_acc(mint, lecturer),
+            deliverer: deliverer_pda(lecturer),
+            sponsor_payment: token_acc(mint, sponsor),
+            token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )

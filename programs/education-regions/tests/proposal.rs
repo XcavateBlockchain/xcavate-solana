@@ -328,3 +328,95 @@ fn clear_region_state_after_reject() {
     ok(&mut svm, clear_ix(&cranker.pubkey(), 1), &cranker, &[&cranker]);
     assert!(svm.get_account(&region_state(1)).map_or(true, |a| a.data.is_empty()));
 }
+
+// ============================ threshold / quorum ============================
+
+#[test]
+fn finalize_all_abstain_passes_if_quorum() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // Abstain counts toward quorum but not the approval base, so an all-abstain
+    // proposal that clears quorum passes (intended behavior).
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Abstain, 200_000_000), &voter, &[&voter]);
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Auctioning);
+}
+
+#[test]
+fn finalize_exact_threshold_passes() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // yes == no is exactly the 50% threshold (yes*2 >= yes+no holds at equality).
+    let yes_voter = actor(&mut svm);
+    let no_voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&yes_voter.pubkey(), 1, id, Vote::Yes, 100_000_000), &yes_voter, &[&yes_voter]);
+    ok(&mut svm, vote_ix(&no_voter.pubkey(), 1, id, Vote::No, 100_000_000), &no_voter, &[&no_voter]);
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Auctioning);
+}
+
+#[test]
+fn finalize_below_threshold_rejects() {
+    let (mut svm, operator, authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+
+    // yes < no fails the threshold even though quorum is met.
+    let yes_voter = actor(&mut svm);
+    let no_voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&yes_voter.pubkey(), 1, id, Vote::Yes, 100_000_000), &yes_voter, &[&yes_voter]);
+    ok(&mut svm, vote_ix(&no_voter.pubkey(), 1, id, Vote::No, 200_000_000), &no_voter, &[&no_voter]);
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+}
+
+#[test]
+fn finalize_below_quorum_rejects() {
+    let (mut svm, _operator, authority) = setup();
+    // Raise the quorum above a single vote so a lone yes cannot reach it.
+    let mut params = default_params();
+    params.quorum = 300_000_000;
+    ok(&mut svm, update_config_ix(&authority.pubkey(), &authority.pubkey(), params), &authority, &[&authority]);
+
+    let operator = new_operator(&mut svm, &authority);
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    // Unanimous yes, but total 200M is below the 300M quorum.
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+}
