@@ -187,6 +187,33 @@ pub fn region_pda(region_id: u16) -> Pubkey {
     )
     .0
 }
+pub fn regions_config() -> Pubkey {
+    Pubkey::find_program_address(&[education_regions::CONFIG_SEED], &regions_id()).0
+}
+pub fn regions_vault() -> Pubkey {
+    Pubkey::find_program_address(&[education_regions::VAULT_SEED], &regions_id()).0
+}
+pub fn region_state_pda(region_id: u16) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::REGION_STATE_SEED, &region_id.to_le_bytes()],
+        &regions_id(),
+    )
+    .0
+}
+pub fn region_proposal_pda(proposal_id: u64) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::PROPOSAL_SEED, &proposal_id.to_le_bytes()],
+        &regions_id(),
+    )
+    .0
+}
+pub fn region_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::VOTE_SEED, &proposal_id.to_le_bytes(), voter.as_ref()],
+        &regions_id(),
+    )
+    .0
+}
 pub fn proposal_pda(proposal_id: u64) -> Pubkey {
     Pubkey::find_program_address(&[MODULE_PROPOSAL_SEED, &proposal_id.to_le_bytes()], &eid()).0
 }
@@ -293,6 +320,16 @@ pub fn err(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keyp
         Err(failed) => {
             let logs = failed.meta.logs.join("\n");
             assert!(logs.contains(code), "expected error {code}, got logs:\n{logs}");
+        }
+    }
+}
+
+/// Send an instruction expecting success and return the compute units it burned.
+pub fn send_cu(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keypair]) -> u64 {
+    match process(svm, ix, payer, signers) {
+        Ok(meta) => meta.compute_units_consumed,
+        Err(failed) => {
+            panic!("expected success, failed with: {:?}\n{}", failed.err, failed.meta.logs.join("\n"))
         }
     }
 }
@@ -943,6 +980,274 @@ pub struct World {
     pub operator: Keypair,
 }
 
+// --- regions governance builders (for the cross-program e2e) ---
+
+pub fn regions_default_params() -> education_regions::instructions::ConfigParams {
+    education_regions::instructions::ConfigParams {
+        proposal_deposit: 1_000_000_000,
+        minimum_voting_amount: 100_000_000,
+        minimum_region_deposit: 500_000_000,
+        voting_period: 1_000,
+        auction_period: 1_000,
+        owner_change_period: 10_000,
+        threshold_bps: 5_000,
+        quorum: 100_000_000,
+        removal_deposit: 1_000_000_000,
+        removal_voting_period: 1_000,
+        slash_amount: 100_000_000,
+        notice_period: 5_000,
+        allowed_strikes: 3,
+    }
+}
+
+pub fn regions_init_ix(authority: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::InitializeConfig { params: regions_default_params() }.data(),
+        education_regions::accounts::InitializeConfig {
+            authority: *authority,
+            program: regions_id(),
+            program_data: program_data_pda(&regions_id()),
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            treasury: treasury_pda(),
+            vault: regions_vault(),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn region_propose_ix(proposer: &Pubkey, region_id: u16, proposal_id: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::ProposeNewRegion { region_id }.data(),
+        education_regions::accounts::ProposeNewRegion {
+            proposer: *proposer,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            proposer_token: token_acc(&xcav_mint(), proposer),
+            vault: regions_vault(),
+            operator_role: role_pda(proposer, Role::RegionalOperator),
+            region: region_pda(region_id),
+            region_state: region_state_pda(region_id),
+            proposal: region_proposal_pda(proposal_id),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn region_vote_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::VoteOnRegionProposal {
+            region_id,
+            vote: education_regions::state::Vote::Yes,
+            amount,
+        }
+        .data(),
+        education_regions::accounts::VoteOnRegionProposal {
+            voter: *voter,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            voter_token: token_acc(&xcav_mint(), voter),
+            vault: regions_vault(),
+            region_state: region_state_pda(region_id),
+            proposal: region_proposal_pda(proposal_id),
+            vote_record: region_vote_pda(proposal_id, voter),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn region_finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::FinalizeRegionProposal { region_id }.data(),
+        education_regions::accounts::FinalizeRegionProposal {
+            cranker: *cranker,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            vault: regions_vault(),
+            region_state: region_state_pda(region_id),
+            proposal: region_proposal_pda(proposal_id),
+            proposer: *proposer,
+            proposer_token: Some(token_acc(&xcav_mint(), proposer)),
+            treasury: treasury_pda(),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn region_bid_ix(bidder: &Pubkey, region_id: u16, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::BidOnRegion { region_id, amount }.data(),
+        education_regions::accounts::BidOnRegion {
+            bidder: *bidder,
+            config: regions_config(),
+            operator_role: role_pda(bidder, Role::RegionalOperator),
+            xcav_mint: xcav_mint(),
+            bidder_token: token_acc(&xcav_mint(), bidder),
+            vault: regions_vault(),
+            region_state: region_state_pda(region_id),
+            previous_bidder_token: None,
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn region_create_ix(creator: &Pubkey, region_id: u16) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::CreateNewRegion { region_id }.data(),
+        education_regions::accounts::CreateNewRegion {
+            creator: *creator,
+            creator_role: role_pda(creator, Role::RegionalOperator),
+            config: regions_config(),
+            region_state: region_state_pda(region_id),
+            region: region_pda(region_id),
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn replacement_auction_pda(region_id: u16) -> Pubkey {
+    Pubkey::find_program_address(
+        &[education_regions::REPLACEMENT_AUCTION_SEED, &region_id.to_le_bytes()],
+        &regions_id(),
+    )
+    .0
+}
+
+/// Schedule the current operator's departure, opening the seat after the notice period.
+pub fn resign_ix(operator: &Pubkey, region_id: u16) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::InitiateResignation { region_id }.data(),
+        education_regions::accounts::InitiateResignation {
+            operator: *operator,
+            config: regions_config(),
+            operator_role: role_pda(operator, Role::RegionalOperator),
+            region: region_pda(region_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Bid to take over an open region seat; `previous` refunds the outbid leader.
+pub fn bid_replacement_ix(
+    bidder: &Pubkey,
+    region_id: u16,
+    amount: u64,
+    previous: Option<Pubkey>,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::BidOnReplacement { region_id, amount }.data(),
+        education_regions::accounts::BidOnReplacement {
+            bidder: *bidder,
+            config: regions_config(),
+            operator_role: role_pda(bidder, Role::RegionalOperator),
+            xcav_mint: xcav_mint(),
+            bidder_token: token_acc(&xcav_mint(), bidder),
+            vault: regions_vault(),
+            region: region_pda(region_id),
+            auction: replacement_auction_pda(region_id),
+            previous_bidder_token: previous.as_ref().map(|p| token_acc(&xcav_mint(), p)),
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Finalize a replacement auction, installing the winner and refunding the old owner's collateral.
+pub fn finalize_replacement_ix(cranker: &Pubkey, region_id: u16, old_owner: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        regions_id(),
+        &education_regions::instruction::FinalizeReplacement { region_id }.data(),
+        education_regions::accounts::FinalizeReplacement {
+            cranker: *cranker,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            vault: regions_vault(),
+            region: region_pda(region_id),
+            auction: replacement_auction_pda(region_id),
+            old_owner_token: Some(token_acc(&xcav_mint(), old_owner)),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Drive the regions governance flow end to end so `region_id` is created by
+/// the regions program (not seeded), owned by `operator`: propose, pass the
+/// vote, finalize into an auction, win it, and create the region.
+pub fn govern_region(w: &mut World, operator: &Keypair, region_id: u16) {
+    let admin = w.admin.insecure_clone();
+    ok(&mut w.svm, roles_assign_ix(&admin.pubkey(), &operator.pubkey(), Role::RegionalOperator), &admin, &[&admin]);
+
+    let proposal_id = regions_proposal_counter(&w.svm);
+    ok(&mut w.svm, region_propose_ix(&operator.pubkey(), region_id, proposal_id), operator, &[operator]);
+
+    let voter = actor(&mut w.svm);
+    ok(&mut w.svm, region_vote_ix(&voter.pubkey(), region_id, proposal_id, 200_000_000), &voter, &[&voter]);
+
+    warp(&mut w.svm, 2_000); // past the voting window
+    let cranker = funded(&mut w.svm);
+    ok(&mut w.svm, region_finalize_ix(&cranker.pubkey(), region_id, proposal_id, &operator.pubkey()), &cranker, &[&cranker]);
+
+    ok(&mut w.svm, region_bid_ix(&operator.pubkey(), region_id, 600_000_000), operator, &[operator]);
+    warp(&mut w.svm, 2_000); // past the auction window
+    ok(&mut w.svm, region_create_ix(&operator.pubkey(), region_id), operator, &[operator]);
+}
+
+pub fn regions_proposal_counter(svm: &LiteSVM) -> u64 {
+    let acc = svm.get_account(&regions_config()).unwrap();
+    let cfg = education_regions::state::Config::try_deserialize(&mut &acc.data[..]).unwrap();
+    cfg.proposal_counter
+}
+
+/// Like `setup`, but initializes the regions config (creating a real treasury
+/// and vault) instead of seeding a Region, so a test can drive the governance
+/// flow to create one. The returned `operator` holds no role yet.
+pub fn setup_governed() -> World {
+    let mut svm = LiteSVM::new();
+    svm.add_program(roles_id(), include_bytes!("../../../../target/deploy/xcavate_roles.so")).unwrap();
+    svm.add_program(regions_id(), include_bytes!("../../../../target/deploy/education_regions.so")).unwrap();
+    svm.add_program(eid(), include_bytes!("../../../../target/deploy/real_x_education.so")).unwrap();
+    set_mint(&mut svm, xcav_mint());
+    set_mint(&mut svm, usdc_mint());
+    set_mint_dec(&mut svm, gbp_mint(), GBP_DECIMALS);
+
+    let authority = funded(&mut svm);
+    bind_upgrade_authority(&mut svm, &roles_id(), &authority.pubkey());
+    bind_upgrade_authority(&mut svm, &regions_id(), &authority.pubkey());
+    bind_upgrade_authority(&mut svm, &eid(), &authority.pubkey());
+    ok(&mut svm, roles_init_ix(&authority.pubkey()), &authority, &[&authority]);
+
+    let admin = funded(&mut svm);
+    ok(&mut svm, roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+
+    // Regions init creates the shared treasury and the regions vault for real.
+    ok(&mut svm, regions_init_ix(&authority.pubkey()), &authority, &[&authority]);
+
+    let operator = actor(&mut svm);
+    let protocol = actor(&mut svm);
+    ok(&mut svm, edu_init_ix(&authority.pubkey(), &protocol.pubkey()), &authority, &[&authority]);
+
+    World { svm, admin, authority, protocol, operator }
+}
+
 /// Loads the three programs, seeds mints, a created region, and the education
 /// config. The region operator is seeded directly into a `Region` account.
 pub fn setup() -> World {
@@ -1144,20 +1449,16 @@ pub fn clear_old_cancellation_ix(school: &Pubkey, booking_id: u64) -> Instructio
     )
 }
 
+// The role account is always the canonical PDA; the handler renounces it only
+// while live, so an already-closed role is simply passed through.
 pub fn unregister_deliverer_ix(lecturer: &Pubkey, roles_authority: &Pubkey) -> Instruction {
-    unregister_deliverer_ix_opt(lecturer, roles_authority, true)
-}
-
-// `with_role` false omits the role account (Anchor `None`), for the case where
-// the deliverer already gave the role up and is only recovering the deposit.
-pub fn unregister_deliverer_ix_opt(lecturer: &Pubkey, roles_authority: &Pubkey, with_role: bool) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::UnregisterModuleDeliverer {}.data(),
         real_x_education::accounts::UnregisterDeliverer {
             deliverer_signer: *lecturer,
             config: config_pda(),
-            deliverer_role: with_role.then(|| role_pda(lecturer, Role::ModuleDeliverer)),
+            deliverer_role: role_pda(lecturer, Role::ModuleDeliverer),
             roles_config: roles_config(),
             roles_authority: *roles_authority,
             xcav_mint: xcav_mint(),

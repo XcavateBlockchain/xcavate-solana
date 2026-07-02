@@ -105,9 +105,8 @@ pub fn register_deliverer_handler(ctx: Context<RegisterDeliverer>) -> Result<()>
 }
 
 /// Unregister as a deliverer and withdraw the deposit. Requires no active
-/// claims, and renounces the ModuleDeliverer role if it is still held, so
-/// strikes can't be shed by cycling out and back in. The role account is
-/// optional so a deliverer who already gave it up can still get their deposit.
+/// claims, and renounces the ModuleDeliverer role if it is still held. A
+/// deliverer who already gave the role up still recovers their deposit.
 #[derive(Accounts)]
 pub struct UnregisterDeliverer<'info> {
     #[account(mut)]
@@ -116,6 +115,9 @@ pub struct UnregisterDeliverer<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
 
+    /// The deliverer's ModuleDeliverer role at its canonical PDA. The handler
+    /// renounces it while it is still live and leaves an already-closed one alone.
+    /// CHECK: address is fixed by the seeds; state is read in the handler.
     #[account(
         mut,
         seeds = [
@@ -123,10 +125,10 @@ pub struct UnregisterDeliverer<'info> {
             deliverer_signer.key().as_ref(),
             &[Role::ModuleDeliverer.seed_byte()],
         ],
-        bump = deliverer_role.bump,
+        bump,
         seeds::program = xcavate_roles::ID,
     )]
-    pub deliverer_role: Option<Box<Account<'info, RoleAccount>>>,
+    pub deliverer_role: UncheckedAccount<'info>,
 
     #[account(
         seeds = [xcavate_roles::CONFIG_SEED],
@@ -188,10 +190,11 @@ pub fn unregister_deliverer_handler(ctx: Context<UnregisterDeliverer>) -> Result
         ctx.accounts.xcav_mint.decimals,
     )?;
 
-    // Renounce the role if it is still held. A deliverer who already gave it
-    // up reaches here with no role account and just recovers their deposit;
-    // they still need a fresh admin grant to register again.
-    if let Some(deliverer_role) = ctx.accounts.deliverer_role.as_ref() {
+    // Renounce the role while it is still live; an already-closed one (the
+    // deliverer gave it up earlier) is left alone, and they just recover their
+    // deposit and need a fresh grant to register again.
+    let role = &ctx.accounts.deliverer_role;
+    if role.owner == &xcavate_roles::ID && !role.data_is_empty() {
         xcavate_roles::cpi::renounce_role(
             CpiContext::new(
                 ctx.accounts.roles_program.key(),
@@ -199,7 +202,7 @@ pub fn unregister_deliverer_handler(ctx: Context<UnregisterDeliverer>) -> Result
                     user: ctx.accounts.deliverer_signer.to_account_info(),
                     config: ctx.accounts.roles_config.to_account_info(),
                     authority: ctx.accounts.roles_authority.to_account_info(),
-                    role_account: deliverer_role.to_account_info(),
+                    role_account: role.to_account_info(),
                 },
             ),
             Role::ModuleDeliverer,

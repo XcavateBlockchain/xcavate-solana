@@ -191,8 +191,8 @@ fn unregister_recovers_deposit_after_role_gone() {
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
     ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
 
-    // An admin removes the role while the deposit is still locked, leaving no
-    // role account to renounce. Unregister must still return the deposit.
+    // An admin removes the role while the deposit is still locked. Unregister
+    // passes the now-closed role PDA, reads it as gone, and returns the deposit.
     let admin = w.admin.insecure_clone();
     ok(&mut w.svm, roles_remove_ix(&admin.pubkey(), &lecturer.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
     assert!(closed(&w.svm, &role_pda(&lecturer.pubkey(), Role::ModuleDeliverer)));
@@ -200,10 +200,43 @@ fn unregister_recovers_deposit_after_role_gone() {
     let before = balance(&w.svm, &xcav_mint(), &lecturer.pubkey());
     ok(
         &mut w.svm,
-        unregister_deliverer_ix_opt(&lecturer.pubkey(), &w.authority.pubkey(), false),
+        unregister_deliverer_ix(&lecturer.pubkey(), &w.authority.pubkey()),
         &lecturer,
         &[&lecturer],
     );
     assert_eq!(balance(&w.svm, &xcav_mint(), &lecturer.pubkey()) - before, DELIVERER_DEPOSIT);
     assert!(closed(&w.svm, &deliverer_pda(&lecturer.pubkey())));
+}
+
+// A deliverer carrying a strike still gives up the role on unregister, so
+// re-registering (which would reset the strike) needs a fresh admin grant.
+#[test]
+fn unregister_with_strike_renounces_role() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+
+    ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
+    ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
+    ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
+    ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+
+    // Earn a strike, then drop back to zero active claims so unregister opens.
+    ok(&mut w.svm, claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
+    ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
+    assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).active_strikes, 1);
+
+    ok(&mut w.svm, unregister_deliverer_ix(&lecturer.pubkey(), &w.authority.pubkey()), &lecturer, &[&lecturer]);
+    assert!(closed(&w.svm, &role_pda(&lecturer.pubkey(), Role::ModuleDeliverer)));
+
+    // With the role gone, re-registering is blocked until an admin grants it again.
+    err(
+        &mut w.svm,
+        register_deliverer_ix(&lecturer.pubkey()),
+        &lecturer,
+        &[&lecturer],
+        "AccountNotInitialized",
+    );
 }
