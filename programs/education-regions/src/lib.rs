@@ -2,6 +2,7 @@ pub mod constants;
 pub mod error;
 pub mod instructions;
 pub mod state;
+pub mod mint_guard;
 pub mod vault;
 
 use anchor_lang::prelude::*;
@@ -32,6 +33,11 @@ pub mod education_regions {
     /// Rotate the config authority. Current-authority-only.
     pub fn update_authority(ctx: Context<UpdateAuthority>, new_authority: Pubkey) -> Result<()> {
         initialize::update_authority_handler(ctx, new_authority)
+    }
+
+    /// Move funds out of the protocol treasury. Authority-only.
+    pub fn withdraw_treasury(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
+        initialize::withdraw_treasury_handler(ctx, amount)
     }
 
     /// Propose a new region. RegionalOperator-only; locks a deposit.

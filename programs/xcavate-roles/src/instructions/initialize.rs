@@ -5,15 +5,20 @@ use crate::error::RolesError;
 use crate::state::Config;
 
 /// Creates the singleton config and sets the sudo authority to the signer.
-///
-/// First caller becomes the sudo authority, so run this in the same script
-/// that deploys the program, otherwise someone could claim it in between.
-/// Before mainnet, bind it to the program's upgrade authority by loading the
-/// `ProgramData` account and checking `upgrade_authority_address`.
+/// Only the program's upgrade authority can call this, so the config can't be
+/// claimed by a front-runner between deploy and initialization.
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    /// This program's executable account, tying `program_data` to it.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ RolesError::NotUpgradeAuthority)]
+    pub program: Program<'info, crate::program::XcavateRoles>,
+
+    /// The program's upgrade authority must be the initializing signer.
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ RolesError::NotUpgradeAuthority)]
+    pub program_data: Account<'info, ProgramData>,
 
     #[account(
         init,

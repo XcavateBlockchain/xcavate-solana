@@ -1,8 +1,8 @@
 use anchor_lang::prelude::*;
 
-use crate::constants::{ADMIN_SEED, ROLE_SEED};
+use crate::constants::{ADMIN_SEED, CONFIG_SEED, ROLE_SEED};
 use crate::error::RolesError;
-use crate::state::{AccessPermission, Admin, Role, RoleAccount};
+use crate::state::{AccessPermission, Admin, Config, Role, RoleAccount};
 
 /// Grant a role to a user. The assignment starts compliant. Admin-only.
 #[derive(Accounts)]
@@ -70,6 +70,33 @@ pub struct RemoveRole<'info> {
 }
 
 pub fn remove_role_handler(ctx: Context<RemoveRole>, role: Role) -> Result<()> {
+    emit!(RoleRemoved { user: ctx.accounts.user.key(), role });
+    Ok(())
+}
+
+/// Give up one's own role and refund the account rent to the authority. Holder-signed.
+#[derive(Accounts)]
+#[instruction(role: Role)]
+pub struct RenounceRole<'info> {
+    pub user: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+
+    /// CHECK: rent destination, fixed to the configured authority.
+    #[account(mut, address = config.authority)]
+    pub authority: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        close = authority,
+        seeds = [ROLE_SEED, user.key().as_ref(), &[role.seed_byte()]],
+        bump = role_account.bump,
+    )]
+    pub role_account: Account<'info, RoleAccount>,
+}
+
+pub fn renounce_role_handler(ctx: Context<RenounceRole>, role: Role) -> Result<()> {
     emit!(RoleRemoved { user: ctx.accounts.user.key(), role });
     Ok(())
 }

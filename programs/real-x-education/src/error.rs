@@ -113,4 +113,10 @@ pub enum EducationError {
     /// The reservation's upload deadline has not yet passed.
     #[msg("Upload deadline has not passed")]
     UploadDeadlineNotReached,
+    /// The mint carries a token extension the escrow accounting cannot support.
+    #[msg("Unsupported token extension on mint")]
+    UnsupportedMintExtension,
+    /// The signer is not the program's upgrade authority.
+    #[msg("Signer is not the program upgrade authority")]
+    NotUpgradeAuthority,
 }

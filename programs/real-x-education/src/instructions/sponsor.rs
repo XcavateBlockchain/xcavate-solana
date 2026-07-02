@@ -88,6 +88,7 @@ pub fn sponsor_module_handler(
             .accepts(&ctx.accounts.payment_mint.key()),
         EducationError::PaymentAssetNotSupported
     );
+    crate::mint_guard::require_supported_mint(&ctx.accounts.payment_mint.to_account_info())?;
     require!(
         token_amount <= ctx.accounts.module.sponsor_allocation,
         EducationError::NotEnoughTokenAvailable

@@ -71,4 +71,13 @@ pub enum RegionsError {
     /// Arithmetic overflow.
     #[msg("Arithmetic overflow")]
     Overflow,
+    /// A payout recipient's token account is required on this path.
+    #[msg("Recipient token account is required")]
+    MissingRecipientToken,
+    /// The mint carries a token extension the escrow accounting cannot support.
+    #[msg("Unsupported token extension on mint")]
+    UnsupportedMintExtension,
+    /// The signer is not the program's upgrade authority.
+    #[msg("Signer is not the program upgrade authority")]
+    NotUpgradeAuthority,
 }

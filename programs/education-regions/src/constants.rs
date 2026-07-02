@@ -36,3 +36,7 @@ pub const REMOVAL_VOTE_SEED: &[u8] = b"removal_vote";
 /// PDA seed for a region's replacement auction (one per region).
 #[constant]
 pub const REPLACEMENT_AUCTION_SEED: &[u8] = b"replacement_auction";
+
+/// The protocol treasury token account (program owned, shared with real-x).
+#[constant]
+pub const TREASURY_SEED: &[u8] = b"treasury";

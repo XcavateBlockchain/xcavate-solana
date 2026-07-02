@@ -55,13 +55,15 @@ pub struct FinalizeRegionProposal<'info> {
     #[account(mut)]
     pub proposer: UncheckedAccount<'info>,
 
-    /// The proposer's XCAV account; receives the returned deposit if it passed.
+    /// The proposer's XCAV account; receives the returned deposit on a pass.
+    /// Optional so a rejection (which slashes to the treasury) can still be
+    /// cranked when the proposer has closed their token account.
     #[account(
         mut,
         token::mint = config.xcav_mint,
         token::authority = proposer,
     )]
-    pub proposer_token: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub proposer_token: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
 
     /// The configured treasury XCAV account; receives a slashed deposit.
     #[account(mut, address = config.treasury @ RegionsError::InvalidTreasury)]
@@ -95,7 +97,7 @@ pub fn finalize_region_proposal_handler(
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
     let meets_threshold = total != 0
         && (yes as u128).saturating_mul(10_000) >= (approval_base as u128).saturating_mul(threshold_bps);
-    let meets_quorum = total >= ctx.accounts.config.quorum;
+    let meets_quorum = total > ctx.accounts.config.quorum;
     let proposal_id = proposal.proposal_id;
     let deposit = proposal.deposit;
 
@@ -105,16 +107,39 @@ pub fn finalize_region_proposal_handler(
     if meets_threshold && meets_quorum {
         // Passed: return the proposer's deposit and open the region for bidding.
         // (The proposal account also closes, returning its rent to the proposer.)
+        let proposer_token = ctx
+            .accounts
+            .proposer_token
+            .as_ref()
+            .ok_or(RegionsError::MissingRecipientToken)?;
         release_from_vault(
             &ctx.accounts.token_program.to_account_info(),
             &ctx.accounts.vault.to_account_info(),
             &ctx.accounts.xcav_mint.to_account_info(),
-            &ctx.accounts.proposer_token.to_account_info(),
+            &proposer_token.to_account_info(),
             &ctx.accounts.config.to_account_info(),
             config_bump,
             deposit,
             decimals,
         )?;
+
+        // Reward the proposer with a deposit-matching payment from the
+        // treasury, skipped silently when the treasury cannot afford it.
+        let reward = if ctx.accounts.treasury.amount >= deposit {
+            release_from_vault(
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.treasury.to_account_info(),
+                &ctx.accounts.xcav_mint.to_account_info(),
+                &proposer_token.to_account_info(),
+                &ctx.accounts.config.to_account_info(),
+                config_bump,
+                deposit,
+                decimals,
+            )?;
+            deposit
+        } else {
+            0
+        };
 
         let region_state = &mut ctx.accounts.region_state;
         region_state.status = RegionStatus::Auctioning;
@@ -124,7 +149,7 @@ pub fn finalize_region_proposal_handler(
             .checked_add(ctx.accounts.config.auction_period)
             .ok_or(RegionsError::Overflow)?;
 
-        emit!(RegionAuctionStarted { region_id, proposal_id });
+        emit!(RegionAuctionStarted { region_id, proposal_id, reward });
     } else {
         // Rejected: slash the deposit to the treasury. (The proposal account
         // still closes, returning its rent to the proposer.)
@@ -149,6 +174,8 @@ pub fn finalize_region_proposal_handler(
 pub struct RegionAuctionStarted {
     pub region_id: u16,
     pub proposal_id: u64,
+    /// The treasury reward paid to the proposer (zero if unaffordable).
+    pub reward: u64,
 }
 
 #[event]

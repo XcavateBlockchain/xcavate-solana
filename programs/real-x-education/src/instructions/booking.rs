@@ -216,6 +216,17 @@ pub struct FinishBooking<'info> {
     #[account(mut)]
     pub school: Signer<'info>,
 
+    #[account(
+        seeds = [
+            xcavate_roles::ROLE_SEED,
+            school.key().as_ref(),
+            &[Role::ModuleBooker.seed_byte()],
+        ],
+        bump = school_role.bump,
+        seeds::program = xcavate_roles::ID,
+    )]
+    pub school_role: Box<Account<'info, RoleAccount>>,
+
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
 

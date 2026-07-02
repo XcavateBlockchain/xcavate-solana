@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::constants::{CONFIG_SEED, VAULT_SEED};
+use crate::constants::{CONFIG_SEED, TREASURY_SEED, VAULT_SEED};
 use crate::error::RegionsError;
 use crate::state::Config;
 
@@ -73,16 +73,21 @@ impl ConfigParams {
     }
 }
 
-/// Creates the singleton config and sets the authority to the signer.
-///
-/// First caller becomes the authority, so run this in the same script that
-/// deploys the program, otherwise someone could claim it in between. Before
-/// mainnet, bind it to the program's upgrade authority by loading the
-/// `ProgramData` account and checking `upgrade_authority_address`.
+/// Creates the singleton config and sets the authority to the signer. Only
+/// the program's upgrade authority can call this, so the config can't be
+/// claimed by a front-runner between deploy and initialization.
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    /// This program's executable account, tying `program_data` to it.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ RegionsError::NotUpgradeAuthority)]
+    pub program: Program<'info, crate::program::EducationRegions>,
+
+    /// The program's upgrade authority must be the initializing signer.
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ RegionsError::NotUpgradeAuthority)]
+    pub program_data: Account<'info, ProgramData>,
 
     #[account(
         init,
@@ -96,8 +101,17 @@ pub struct InitializeConfig<'info> {
     /// The XCAV governance mint the protocol stakes.
     pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
 
-    /// The treasury that receives slashed deposits; must be an XCAV account.
-    #[account(token::mint = xcav_mint)]
+    /// The protocol treasury: a program-owned XCAV account that collects
+    /// slashes (from this program and real-x) and funds proposer rewards.
+    /// Anyone can pay in; only this program can pay out.
+    #[account(
+        init,
+        payer = authority,
+        seeds = [TREASURY_SEED],
+        bump,
+        token::mint = xcav_mint,
+        token::authority = config,
+    )]
     pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// The protocol's XCAV escrow vault, owned by the config PDA.
@@ -117,6 +131,7 @@ pub struct InitializeConfig<'info> {
 
 pub fn handler(ctx: Context<InitializeConfig>, params: ConfigParams) -> Result<()> {
     params.validate()?;
+    crate::mint_guard::require_supported_mint(&ctx.accounts.xcav_mint.to_account_info())?;
 
     let config = &mut ctx.accounts.config;
     config.authority = ctx.accounts.authority.key();
@@ -134,9 +149,10 @@ pub fn handler(ctx: Context<InitializeConfig>, params: ConfigParams) -> Result<(
     Ok(())
 }
 
-/// Update the governance parameters. Authority-only. Open proposals and auctions
-/// keep the values they were created with; only future ones see the change. The
-/// mint is fixed at initialization and can't be changed here.
+/// Update the governance parameters. Authority-only. Each proposal snapshots
+/// its deposit and expiry, but threshold, quorum and slash amount are read live
+/// at finalization, so a change reaches proposals already in flight. The mint
+/// and treasury are fixed at initialization.
 #[derive(Accounts)]
 pub struct UpdateConfig<'info> {
     pub authority: Signer<'info>,
@@ -148,24 +164,57 @@ pub struct UpdateConfig<'info> {
         has_one = authority @ RegionsError::NotAuthority,
     )]
     pub config: Box<Account<'info, Config>>,
-
-    /// The configured XCAV mint (the treasury is validated against it).
-    #[account(address = config.xcav_mint @ RegionsError::InvalidMint)]
-    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
-
-    /// The treasury that receives slashed deposits; must be an XCAV account.
-    #[account(token::mint = config.xcav_mint)]
-    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 }
 
 pub fn update_config_handler(ctx: Context<UpdateConfig>, params: ConfigParams) -> Result<()> {
     params.validate()?;
-    let treasury = ctx.accounts.treasury.key();
     let config = &mut ctx.accounts.config;
-    config.treasury = treasury;
     params.apply(config);
 
-    emit!(ConfigUpdated { treasury });
+    emit!(ConfigUpdated { treasury: config.treasury });
+    Ok(())
+}
+
+/// Move funds out of the protocol treasury. Authority-only; the destination
+/// just has to be an XCAV account, so the authority decides where collected
+/// slashes go.
+#[derive(Accounts)]
+pub struct WithdrawTreasury<'info> {
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        has_one = authority @ RegionsError::NotAuthority,
+    )]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(address = config.xcav_mint @ RegionsError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(mut, address = config.treasury @ RegionsError::InvalidTreasury)]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, token::mint = config.xcav_mint)]
+    pub destination: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+pub fn withdraw_treasury_handler(ctx: Context<WithdrawTreasury>, amount: u64) -> Result<()> {
+    require!(amount > 0, RegionsError::InvalidConfig);
+    crate::vault::release_from_vault(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.treasury.to_account_info(),
+        &ctx.accounts.xcav_mint.to_account_info(),
+        &ctx.accounts.destination.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        ctx.accounts.config.bump,
+        amount,
+        ctx.accounts.xcav_mint.decimals,
+    )?;
+
+    emit!(TreasuryWithdrawn { destination: ctx.accounts.destination.key(), amount });
     Ok(())
 }
 
@@ -207,6 +256,12 @@ pub struct ConfigInitialized {
 #[event]
 pub struct ConfigUpdated {
     pub treasury: Pubkey,
+}
+
+#[event]
+pub struct TreasuryWithdrawn {
+    pub destination: Pubkey,
+    pub amount: u64,
 }
 
 #[event]

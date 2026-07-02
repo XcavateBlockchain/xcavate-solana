@@ -19,8 +19,6 @@ pub enum Role {
     ModuleDeliverer,
     /// AI agent that evaluates impact / scores delivery.
     ModuleAIAgent,
-    /// Recipient of the educational content.
-    ModuleRecipient,
 }
 
 impl Role {
@@ -34,14 +32,15 @@ impl Role {
             Role::ModuleBooker => 3,
             Role::ModuleDeliverer => 4,
             Role::ModuleAIAgent => 5,
-            Role::ModuleRecipient => 6,
         }
     }
 }
 
 /// Compliance status for a (user, role) assignment, set by an admin after
-/// off-chain KYC/AML. Everything else in the protocol gates on this flag.
-/// Later it'll be driven by a SAS attestation instead of a manual toggle.
+/// off-chain KYC/AML. The education programs gate on role existence only and
+/// do not read this flag; it is bookkeeping for market-side programs that
+/// need a softer switch than removing the role outright. Later it'll be
+/// driven by a SAS attestation instead of a manual toggle.
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AccessPermission {
     /// Passed KYC/AML, so role-specific actions are allowed.

@@ -54,6 +54,11 @@ pub mod xcavate_roles {
         role::remove_role_handler(ctx, role)
     }
 
+    /// Give up one's own role. Signed by the role holder.
+    pub fn renounce_role(ctx: Context<RenounceRole>, role: Role) -> Result<()> {
+        role::renounce_role_handler(ctx, role)
+    }
+
     /// Update a user's compliance status for a role. Admin-only.
     pub fn set_permission(
         ctx: Context<SetPermission>,

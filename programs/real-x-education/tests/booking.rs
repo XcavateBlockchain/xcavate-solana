@@ -66,7 +66,6 @@ fn cancel_claim_rejected_after_score() {
     let agent = with_role(&mut w, Role::ModuleAIAgent);
     let operator = w.operator.pubkey();
     let protocol = w.protocol.pubkey();
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 5), &sponsor, &[&sponsor]);
@@ -85,7 +84,7 @@ fn cancel_claim_rejected_after_score() {
     let claims_before = deliverer_of(&w.svm, &lecturer.pubkey()).active_claims;
     err(
         &mut w.svm,
-        cancel_claim_ix(&lecturer.pubkey(), &authority, 0, 0),
+        cancel_claim_ix(&lecturer.pubkey(), 0, 0),
         &lecturer,
         &[&lecturer],
         "ScoreAlreadySet",
@@ -256,7 +255,6 @@ fn cancel_booking_refunds_and_returns_token() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 2), &sponsor, &[&sponsor]);
@@ -265,7 +263,7 @@ fn cancel_booking_refunds_and_returns_token() {
     ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
     assert_eq!(sponsorship_of(&w.svm, 0, 0).amount, 1);
 
-    ok(&mut w.svm, cancel_booking_ix(&school.pubkey(), 0, 0, 0, &authority, None), &school, &[&school]);
+    ok(&mut w.svm, cancel_booking_ix(&school.pubkey(), 0, 0, 0, None), &school, &[&school]);
     // Deposit refunded, token returned to the sponsor, booking and escrow closed.
     assert_eq!(balance(&w.svm, &xcav_mint(), &school.pubkey()), before);
     assert_eq!(sponsorship_of(&w.svm, 0, 0).amount, 2);
@@ -280,19 +278,18 @@ fn cancel_booking_third_time_slashes() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
 
-    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    let treasury_before = treasury_balance(&w.svm);
     // Book and cancel the same token three times; the third cancellation hits the
     // ceiling and the deposit is slashed instead of refunded.
     for booking_id in 0..3 {
         ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, booking_id), &school, &[&school]);
-        ok(&mut w.svm, cancel_booking_ix(&school.pubkey(), 0, 0, booking_id, &authority, None), &school, &[&school]);
+        ok(&mut w.svm, cancel_booking_ix(&school.pubkey(), 0, 0, booking_id, None), &school, &[&school]);
     }
-    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, BOOKING_DEPOSIT);
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, BOOKING_DEPOSIT);
 }
 
 #[test]
@@ -301,12 +298,11 @@ fn clear_old_cancellation_works() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
     ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
-    ok(&mut w.svm, cancel_booking_ix(&school.pubkey(), 0, 0, 0, &authority, None), &school, &[&school]);
+    ok(&mut w.svm, cancel_booking_ix(&school.pubkey(), 0, 0, 0, None), &school, &[&school]);
 
     // Not old enough yet.
     err(&mut w.svm, clear_old_cancellation_ix(&school.pubkey(), 0), &school, &[&school], "CancellationNotClearable");
@@ -323,23 +319,22 @@ fn cancel_claim_third_strike_slashes() {
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
     ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
     ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
 
-    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    let treasury_before = treasury_balance(&w.svm);
     // Claim then cancel three times; the third strike slashes the deposit.
     for _ in 0..3 {
         ok(&mut w.svm, claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
-        ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), &authority, 0, 0), &lecturer, &[&lecturer]);
+        ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
     }
     let slash = DELIVERER_DEPOSIT / 10; // 1000 bps
     assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).active_strikes, 3);
     assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).deposit, DELIVERER_DEPOSIT - slash);
-    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, slash);
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, slash);
 }
 
 #[test]
@@ -362,7 +357,7 @@ fn unregister_deliverer_works() {
 
     let before = balance(&w.svm, &xcav_mint(), &lecturer.pubkey());
     ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
-    ok(&mut w.svm, unregister_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+    ok(&mut w.svm, unregister_deliverer_ix(&lecturer.pubkey(), &w.authority.pubkey()), &lecturer, &[&lecturer]);
     assert_eq!(balance(&w.svm, &xcav_mint(), &lecturer.pubkey()), before);
     assert!(closed(&w.svm, &deliverer_pda(&lecturer.pubkey())));
 }
@@ -383,7 +378,7 @@ fn unregister_deliverer_with_active_claim_fails() {
 
     err(
         &mut w.svm,
-        unregister_deliverer_ix(&lecturer.pubkey()),
+        unregister_deliverer_ix(&lecturer.pubkey(), &w.authority.pubkey()),
         &lecturer,
         &[&lecturer],
         "ModuleDelivererStillActive",

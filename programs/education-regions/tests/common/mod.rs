@@ -20,6 +20,7 @@ pub use education_regions::state::{
     Config as RegionsConfig, RegionProposal, RegionState, RegionStatus, Vote, VoteRecord,
 };
 pub use litesvm::LiteSVM;
+pub use xcavate_roles::state::Role;
 pub use solana_keypair::Keypair;
 pub use solana_signer::Signer;
 
@@ -36,7 +37,6 @@ use solana_transaction::versioned::VersionedTransaction;
 
 use education_regions::instructions::ConfigParams;
 use education_regions::{CONFIG_SEED, PROPOSAL_SEED, REGION_SEED, REGION_STATE_SEED, VAULT_SEED, VOTE_SEED};
-use xcavate_roles::state::Role;
 
 pub const SYS: Pubkey = anchor_lang::system_program::ID;
 pub const DEPOSIT: u64 = 1_000_000_000;
@@ -57,6 +57,9 @@ pub fn regions_config() -> Pubkey {
 }
 pub fn vault() -> Pubkey {
     Pubkey::find_program_address(&[VAULT_SEED], &rid()).0
+}
+pub fn treasury_pda() -> Pubkey {
+    Pubkey::find_program_address(&[education_regions::TREASURY_SEED], &rid()).0
 }
 pub fn region_state(region_id: u16) -> Pubkey {
     Pubkey::find_program_address(&[REGION_STATE_SEED, &region_id.to_le_bytes()], &rid()).0
@@ -161,6 +164,21 @@ pub fn vault_balance(svm: &LiteSVM) -> u64 {
     SplAccount::unpack(&acc.data).unwrap().amount
 }
 
+pub fn treasury_balance(svm: &LiteSVM) -> u64 {
+    let acc = svm.get_account(&treasury_pda()).unwrap();
+    SplAccount::unpack(&acc.data).unwrap().amount
+}
+
+// Seed the treasury directly; on a live cluster this is a plain XCAV transfer.
+pub fn fund_treasury(svm: &mut LiteSVM, amount: u64) {
+    let pda = treasury_pda();
+    let mut acc = svm.get_account(&pda).unwrap();
+    let mut token = SplAccount::unpack(&acc.data).unwrap();
+    token.amount = amount;
+    SplAccount::pack(token, &mut acc.data).unwrap();
+    svm.set_account(pda, acc).unwrap();
+}
+
 // --- send helpers ---
 
 pub fn process(
@@ -208,12 +226,34 @@ pub fn actor(svm: &mut LiteSVM) -> Keypair {
 
 // --- roles instruction builders ---
 
+// The programdata account the upgradeable loader keeps beside each program.
+pub fn program_data_pda(program_id: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[program_id.as_ref()],
+        &anchor_lang::solana_program::bpf_loader_upgradeable::ID,
+    )
+    .0
+}
+
+// Point a deployed program's upgrade authority at `authority` so the
+// authority-bound initialize passes. The loader metadata is 4 bytes of enum
+// tag, 8 of slot, then an optional pubkey.
+pub fn bind_upgrade_authority(svm: &mut LiteSVM, program_id: &Pubkey, authority: &Pubkey) {
+    let pd = program_data_pda(program_id);
+    let mut acc = svm.get_account(&pd).unwrap();
+    acc.data[12] = 1;
+    acc.data[13..45].copy_from_slice(authority.as_ref());
+    svm.set_account(pd, acc).unwrap();
+}
+
 pub fn roles_init_ix(authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         roles_id(),
         &xcavate_roles::instruction::InitializeConfig {}.data(),
         xcavate_roles::accounts::InitializeConfig {
             authority: *authority,
+            program: roles_id(),
+            program_data: program_data_pda(&roles_id()),
             config: roles_config(),
             system_program: SYS,
         }
@@ -231,6 +271,20 @@ pub fn roles_add_admin_ix(authority: &Pubkey, new_admin: &Pubkey) -> Instruction
             new_admin: *new_admin,
             admin: admin_pda(new_admin),
             system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn roles_remove_ix(admin: &Pubkey, user: &Pubkey, role: Role) -> Instruction {
+    Instruction::new_with_bytes(
+        roles_id(),
+        &xcavate_roles::instruction::RemoveRole { role }.data(),
+        xcavate_roles::accounts::RemoveRole {
+            admin_signer: *admin,
+            admin: admin_pda(admin),
+            user: *user,
+            role_account: role_pda(user, role),
         }
         .to_account_metas(None),
     )
@@ -275,16 +329,17 @@ pub fn regions_init_ix(authority: &Pubkey) -> Instruction {
     regions_init_ix_with(authority, default_params())
 }
 
-// The authority's own XCAV account doubles as the treasury in tests.
 pub fn regions_init_ix_with(authority: &Pubkey, params: ConfigParams) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::InitializeConfig { params }.data(),
         education_regions::accounts::InitializeConfig {
             authority: *authority,
+            program: rid(),
+            program_data: program_data_pda(&rid()),
             config: regions_config(),
             xcav_mint: xcav_mint(),
-            treasury: token_acc(authority),
+            treasury: treasury_pda(),
             vault: vault(),
             token_program: TOKEN_PROGRAM_ID,
             system_program: SYS,
@@ -293,15 +348,29 @@ pub fn regions_init_ix_with(authority: &Pubkey, params: ConfigParams) -> Instruc
     )
 }
 
-pub fn update_config_ix(authority: &Pubkey, treasury_owner: &Pubkey, params: ConfigParams) -> Instruction {
+pub fn update_config_ix(authority: &Pubkey, params: ConfigParams) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::UpdateConfig { params }.data(),
         education_regions::accounts::UpdateConfig {
             authority: *authority,
             config: regions_config(),
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn withdraw_treasury_ix(authority: &Pubkey, destination_owner: &Pubkey, amount: u64) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::WithdrawTreasury { amount }.data(),
+        education_regions::accounts::WithdrawTreasury {
+            authority: *authority,
+            config: regions_config(),
             xcav_mint: xcav_mint(),
-            treasury: token_acc(treasury_owner),
+            treasury: treasury_pda(),
+            destination: token_acc(destination_owner),
+            token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
@@ -360,7 +429,7 @@ pub fn vote_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, vote: Vote, amo
     )
 }
 
-pub fn finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey, treasury_owner: &Pubkey) -> Instruction {
+pub fn finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::FinalizeRegionProposal { region_id }.data(),
@@ -372,8 +441,30 @@ pub fn finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer:
             region_state: region_state(region_id),
             proposal: proposal_pda(proposal_id),
             proposer: *proposer,
-            proposer_token: token_acc(proposer),
-            treasury: token_acc(treasury_owner),
+            proposer_token: Some(token_acc(proposer)),
+            treasury: treasury_pda(),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+// Finalize without any proposer token account, as a cranker would when the
+// proposer has closed theirs. Only the reject path can settle this way.
+pub fn finalize_no_token_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::FinalizeRegionProposal { region_id }.data(),
+        education_regions::accounts::FinalizeRegionProposal {
+            cranker: *cranker,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            region_state: region_state(region_id),
+            proposal: proposal_pda(proposal_id),
+            proposer: *proposer,
+            proposer_token: None,
+            treasury: treasury_pda(),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -405,6 +496,7 @@ pub fn create_region_ix(creator: &Pubkey, region_id: u16) -> Instruction {
         &education_regions::instruction::CreateNewRegion { region_id }.data(),
         education_regions::accounts::CreateNewRegion {
             creator: *creator,
+            creator_role: role_pda(creator, Role::RegionalOperator),
             config: regions_config(),
             region_state: region_state(region_id),
             region: region_pda(region_id),
@@ -469,6 +561,8 @@ pub fn setup() -> (LiteSVM, Keypair, Keypair) {
 
     let authority = funded(&mut svm);
     give_xcav(&mut svm, &authority.pubkey(), 0); // treasury account
+    bind_upgrade_authority(&mut svm, &roles_id(), &authority.pubkey());
+    bind_upgrade_authority(&mut svm, &rid(), &authority.pubkey());
     ok(&mut svm, roles_init_ix(&authority.pubkey()), &authority, &[&authority]);
 
     let admin = funded(&mut svm);
@@ -506,7 +600,7 @@ pub fn new_operator(svm: &mut LiteSVM, authority: &Keypair) -> Keypair {
 }
 
 // Drives region 1 to the Auctioning state and returns the proposal id.
-pub fn reach_auctioning(svm: &mut LiteSVM, operator: &Keypair, authority: &Keypair) -> u64 {
+pub fn reach_auctioning(svm: &mut LiteSVM, operator: &Keypair, _authority: &Keypair) -> u64 {
     let id = next_proposal_id(svm);
     ok(svm, propose_ix(&operator.pubkey(), 1, id), operator, &[operator]);
     let voter = actor(svm);
@@ -515,7 +609,7 @@ pub fn reach_auctioning(svm: &mut LiteSVM, operator: &Keypair, authority: &Keypa
     let cranker = funded(svm);
     ok(
         svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -620,7 +714,7 @@ pub fn vote_removal_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, vote: V
     )
 }
 
-pub fn finalize_removal_ix(cranker: &Pubkey, region_id: u16, proposer: &Pubkey, treasury_owner: &Pubkey) -> Instruction {
+pub fn finalize_removal_ix(cranker: &Pubkey, region_id: u16, proposer: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::FinalizeRemoval { region_id }.data(),
@@ -632,8 +726,8 @@ pub fn finalize_removal_ix(cranker: &Pubkey, region_id: u16, proposer: &Pubkey, 
             region: region_pda(region_id),
             removal_proposal: removal_proposal_pda(region_id),
             proposer: *proposer,
-            proposer_token: token_acc(proposer),
-            treasury: token_acc(treasury_owner),
+            proposer_token: Some(token_acc(proposer)),
+            treasury: treasury_pda(),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -689,7 +783,7 @@ pub fn finalize_replacement_ix(cranker: &Pubkey, region_id: u16, old_owner: &Pub
             vault: vault(),
             region: region_pda(region_id),
             auction: replacement_auction_pda(region_id),
-            old_owner_token: token_acc(old_owner),
+            old_owner_token: Some(token_acc(old_owner)),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),

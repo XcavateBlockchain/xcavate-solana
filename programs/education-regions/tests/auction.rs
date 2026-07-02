@@ -221,6 +221,27 @@ fn create_region_fails_for_non_winner() {
 }
 
 #[test]
+fn create_region_fails_after_role_revoked() {
+    let (mut svm, operator, authority) = setup();
+    reach_auctioning(&mut svm, &operator, &authority);
+    ok(&mut svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), &operator, &[&operator]);
+    warp_past_voting(&mut svm);
+
+    // The winner loses the RegionalOperator role between the auction and the
+    // creation call; the seat cannot be taken without it.
+    let admin = funded(&mut svm);
+    ok(&mut svm, roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    ok(&mut svm, roles_remove_ix(&admin.pubkey(), &operator.pubkey(), Role::RegionalOperator), &admin, &[&admin]);
+    fails_with(
+        &mut svm,
+        create_region_ix(&operator.pubkey(), 1),
+        &operator,
+        &[&operator],
+        "AccountNotInitialized",
+    );
+}
+
+#[test]
 fn create_region_fails_before_auction_ends() {
     let (mut svm, operator, authority) = setup();
     reach_auctioning(&mut svm, &operator, &authority);

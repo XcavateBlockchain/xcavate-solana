@@ -13,7 +13,6 @@ fn register_tops_up_slashed_deposit() {
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
@@ -23,7 +22,7 @@ fn register_tops_up_slashed_deposit() {
     // Three claim/cancel rounds; the third strike slashes 10% of the deposit.
     for _ in 0..3 {
         ok(&mut w.svm, claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
-        ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), &authority, 0, 0), &lecturer, &[&lecturer]);
+        ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
     }
     let slash = DELIVERER_DEPOSIT / 10; // strike_slash_bps = 1000
     assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).deposit, DELIVERER_DEPOSIT - slash);
@@ -42,7 +41,7 @@ fn unregister_unregistered_fails() {
     let stranger = actor(&mut w.svm);
     err(
         &mut w.svm,
-        unregister_deliverer_ix(&stranger.pubkey()),
+        unregister_deliverer_ix(&stranger.pubkey(), &w.authority.pubkey()),
         &stranger,
         &[&stranger],
         "AccountNotInitialized",
@@ -118,6 +117,30 @@ fn book_nonexistent_sponsorship_fails() {
 }
 
 #[test]
+fn unregister_strips_role_and_blocks_reregister() {
+    let mut w = setup();
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+    ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+    ok(&mut w.svm, unregister_deliverer_ix(&lecturer.pubkey(), &w.authority.pubkey()), &lecturer, &[&lecturer]);
+
+    // Unregistering renounces the role, so strikes cannot be shed by cycling
+    // out and straight back in; a new grant is needed first.
+    assert!(closed(&w.svm, &role_pda(&lecturer.pubkey(), Role::ModuleDeliverer)));
+    err(
+        &mut w.svm,
+        register_deliverer_ix(&lecturer.pubkey()),
+        &lecturer,
+        &[&lecturer],
+        "AccountNotInitialized",
+    );
+
+    let admin = w.admin.insecure_clone();
+    ok(&mut w.svm, roles_assign_ix(&admin.pubkey(), &lecturer.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
+    ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+    assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).deposit, DELIVERER_DEPOSIT);
+}
+
+#[test]
 fn strike_reduced_after_n_deliveries() {
     let mut w = setup();
     // One successful delivery per strike reduction, to keep the flow short.
@@ -145,7 +168,7 @@ fn strike_reduced_after_n_deliveries() {
 
     // Earn a strike by claiming then cancelling.
     ok(&mut w.svm, claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
-    ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), &w.authority.pubkey(), 0, 0), &lecturer, &[&lecturer]);
+    ok(&mut w.svm, cancel_claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
     assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).active_strikes, 1);
 
     // A clean re-delivery scored above threshold reduces the strike.
@@ -160,4 +183,27 @@ fn strike_reduced_after_n_deliveries() {
     let d = deliverer_of(&w.svm, &lecturer.pubkey());
     assert_eq!(d.successful_deliveries, 1);
     assert_eq!(d.active_strikes, 0);
+}
+
+#[test]
+fn unregister_recovers_deposit_after_role_gone() {
+    let mut w = setup();
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+    ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+
+    // An admin removes the role while the deposit is still locked, leaving no
+    // role account to renounce. Unregister must still return the deposit.
+    let admin = w.admin.insecure_clone();
+    ok(&mut w.svm, roles_remove_ix(&admin.pubkey(), &lecturer.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
+    assert!(closed(&w.svm, &role_pda(&lecturer.pubkey(), Role::ModuleDeliverer)));
+
+    let before = balance(&w.svm, &xcav_mint(), &lecturer.pubkey());
+    ok(
+        &mut w.svm,
+        unregister_deliverer_ix_opt(&lecturer.pubkey(), &w.authority.pubkey(), false),
+        &lecturer,
+        &[&lecturer],
+    );
+    assert_eq!(balance(&w.svm, &xcav_mint(), &lecturer.pubkey()) - before, DELIVERER_DEPOSIT);
+    assert!(closed(&w.svm, &deliverer_pda(&lecturer.pubkey())));
 }

@@ -1,6 +1,8 @@
 mod common;
 use common::*;
 
+use anchor_lang::{InstructionData, ToAccountMetas};
+
 #[test]
 fn initialize_config_works() {
     let w = setup();
@@ -92,3 +94,50 @@ fn update_authority_rotates() {
     assert_eq!(config(&w.svm).module_price, 300);
 }
 
+
+#[test]
+fn init_requires_upgrade_authority() {
+    let mut svm = LiteSVM::new();
+    svm.add_program(eid(), include_bytes!("../../../target/deploy/real_x_education.so"))
+        .unwrap();
+    set_mint(&mut svm, xcav_mint());
+    set_treasury(&mut svm);
+    let deployer = funded(&mut svm);
+    bind_upgrade_authority(&mut svm, &eid(), &deployer.pubkey());
+
+    // Someone other than the deployer cannot claim the config.
+    let imposter = funded(&mut svm);
+    give(&mut svm, &xcav_mint(), &imposter.pubkey(), 0);
+    let protocol = Pubkey::new_unique();
+    err(
+        &mut svm,
+        edu_init_ix(&imposter.pubkey(), &protocol),
+        &imposter,
+        &[&imposter],
+        "NotUpgradeAuthority",
+    );
+}
+
+#[test]
+fn update_config_rejects_foreign_treasury() {
+    let mut w = setup();
+    let auth = w.authority.insecure_clone();
+    let protocol = w.protocol.pubkey();
+
+    // The treasury is pinned to the shared protocol treasury; any other XCAV
+    // account is refused.
+    give(&mut w.svm, &xcav_mint(), &auth.pubkey(), 0);
+    let ix = anchor_lang::solana_program::instruction::Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::UpdateConfig { params: default_params() }.data(),
+        real_x_education::accounts::UpdateConfig {
+            authority: auth.pubkey(),
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            treasury: token_acc(&xcav_mint(), &auth.pubkey()),
+            protocol_authority: protocol,
+        }
+        .to_account_metas(None),
+    );
+    err(&mut w.svm, ix, &auth, &[&auth], "InvalidTreasury");
+}

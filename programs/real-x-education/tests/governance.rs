@@ -8,7 +8,6 @@ fn proposal_to_module_flow_works() {
     let agent = with_role(&mut w, Role::ModuleAIAgent);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
 
     // A creator opens a proposal, staking the proposal deposit.
     let staked_before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
@@ -24,7 +23,7 @@ fn proposal_to_module_flow_works() {
     // After voting closes, anyone can finalize; the stake comes back.
     warp_past_voting(&mut w.svm);
     let refund_before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey()), &cranker, &[&cranker]);
     assert_eq!(balance(&w.svm, &xcav_mint(), &creator.pubkey()) - refund_before, MODULE_DEPOSIT);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
 
@@ -38,7 +37,7 @@ fn proposal_to_module_flow_works() {
     ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::UnderReview);
     assert_eq!(deposit_before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
-    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true, &authority), &agent, &[&agent]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true), &agent, &[&agent]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Approved);
 
     ok(&mut w.svm, mint_proposed_ix(&creator.pubkey(), 0, 0), &creator, &[&creator]);
@@ -68,7 +67,6 @@ fn sponsor_proposal_pre_sponsors_on_mint() {
     let agent = with_role(&mut w, Role::ModuleAIAgent);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
 
     // A sponsor opens a proposal, locking the stake plus the pre-sponsorship
     // payment for two tokens (config.pre_sponsor_amount).
@@ -81,13 +79,13 @@ fn sponsor_proposal_pre_sponsors_on_mint() {
     // Pass the vote and finalize.
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey()), &cranker, &[&cranker]);
 
     // A creator reserves, uploads, and builds it; on mint the pre-sponsorship
     // converts into a real sponsorship in the sponsor's name.
     ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
     ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
-    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true, &authority), &agent, &[&agent]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, true), &agent, &[&agent]);
     ok(&mut w.svm, mint_sponsored_ix(&creator.pubkey(), &sponsor.pubkey(), 0, 0, 0), &creator, &[&creator]);
 
     let m = module_of(&w.svm, 0);
@@ -116,22 +114,21 @@ fn unbuilt_sponsor_proposal_expires_and_refunds() {
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
 
     // A sponsor proposal passes the vote but nobody ever builds the module.
     let usdc_before = balance(&w.svm, &usdc_mint(), &sponsor.pubkey());
     ok(&mut w.svm, create_sponsor_proposal_ix(&sponsor.pubkey(), 1, 0, 10), &sponsor, &[&sponsor]);
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &sponsor.pubkey()), &cranker, &[&cranker]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
 
     // Before the build deadline passes the proposal can't be expired.
-    err(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker], "BuildDeadlineNotReached");
+    err(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker], "BuildDeadlineNotReached");
 
     // Once it does, anyone can expire it.
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker]);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
 
     // The sponsor reclaims the pre-sponsorship payment in full and the records
@@ -150,13 +147,12 @@ fn abandoned_reservation_slashes_bond_and_reopens() {
     let creator2 = with_role(&mut w, Role::ModuleCreator);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
 
     // A school opens a proposal that passes, so any creator may build it.
     ok(&mut w.svm, create_proposal_ix(&school.pubkey(), Role::ModuleBooker, 1, 0, 10), &school, &[&school]);
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey()), &cranker, &[&cranker]);
 
     // The first creator reserves the build, locking the bond.
     let before = balance(&w.svm, &xcav_mint(), &creator1.pubkey());
@@ -165,14 +161,14 @@ fn abandoned_reservation_slashes_bond_and_reopens() {
     assert_eq!(before - balance(&w.svm, &xcav_mint(), &creator1.pubkey()), MODULE_DEPOSIT);
 
     // The reservation can't be released until the upload deadline passes.
-    err(&mut w.svm, release_claim_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker], "UploadDeadlineNotReached");
+    err(&mut w.svm, release_claim_ix(&cranker.pubkey(), 0), &cranker, &[&cranker], "UploadDeadlineNotReached");
 
     // After it lapses, anyone can release it: the bond is slashed to the
     // treasury and the proposal reopens.
-    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    let treasury_before = treasury_balance(&w.svm);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, release_claim_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker]);
-    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, MODULE_DEPOSIT);
+    ok(&mut w.svm, release_claim_ix(&cranker.pubkey(), 0), &cranker, &[&cranker]);
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, MODULE_DEPOSIT);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
     assert_eq!(proposal_of(&w.svm, 0).claimant, None);
 
@@ -188,28 +184,27 @@ fn second_review_fail_slashes_deposit_and_bans() {
     let agent = with_role(&mut w, Role::ModuleAIAgent);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
 
     ok(&mut w.svm, create_proposal_ix(&creator.pubkey(), Role::ModuleCreator, 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey()), &cranker, &[&cranker]);
 
     // Claim locks the deposit; it rides through the first failed review.
     let before = balance(&w.svm, &xcav_mint(), &creator.pubkey());
     ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
     assert_eq!(before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
     ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
-    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, false, &authority), &agent, &[&agent]);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, false), &agent, &[&agent]);
     // First fail: back to reserved with the deposit still locked, no slash.
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimed);
     assert_eq!(before - balance(&w.svm, &xcav_mint(), &creator.pubkey()), MODULE_DEPOSIT);
 
     // Re-upload and fail again: the deposit is slashed and the creator banned.
-    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    let treasury_before = treasury_balance(&w.svm);
     ok(&mut w.svm, upload_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
-    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, false, &authority), &agent, &[&agent]);
-    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, MODULE_DEPOSIT);
+    ok(&mut w.svm, review_proposal_ix(&agent.pubkey(), 0, false), &agent, &[&agent]);
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, MODULE_DEPOSIT);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Claimable);
     assert_eq!(proposal_of(&w.svm, 0).claimant, None);
     assert!(proposal_of(&w.svm, 0).banned.contains(&creator.pubkey()));
@@ -276,15 +271,14 @@ fn finalize_reject_slashes_stake() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
     ok(&mut w.svm, create_proposal_ix(&creator.pubkey(), Role::ModuleCreator, 1, 0, 10), &creator, &[&creator]);
     // Meets quorum but is voted down, so it fails the threshold.
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::No, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
 
-    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority), &cranker, &[&cranker]);
-    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, MODULE_DEPOSIT);
+    let treasury_before = treasury_balance(&w.svm);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey()), &cranker, &[&cranker]);
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, MODULE_DEPOSIT);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
 }
 
@@ -294,13 +288,12 @@ fn finalize_while_voting_fails() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
     ok(&mut w.svm, create_proposal_ix(&creator.pubkey(), Role::ModuleCreator, 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
 
     err(
         &mut w.svm,
-        finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority),
+        finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey()),
         &cranker,
         &[&cranker],
         "VotingStillOngoing",
@@ -324,11 +317,10 @@ fn clear_proposal_works() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
     ok(&mut w.svm, create_proposal_ix(&creator.pubkey(), Role::ModuleCreator, 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::No, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey()), &cranker, &[&cranker]);
 
     // A rejected non-sponsor proposal can be cleared, returning its rent.
     ok(&mut w.svm, clear_proposal_ix(&cranker.pubkey(), 0, &creator.pubkey()), &cranker, &[&cranker]);
@@ -342,13 +334,12 @@ fn expire_slashes_riding_deposit() {
     let creator = with_role(&mut w, Role::ModuleCreator);
     let voter = actor(&mut w.svm);
     let cranker = funded(&mut w.svm);
-    let authority = w.authority.pubkey();
 
     // A school proposal passes, so any creator may build it.
     ok(&mut w.svm, create_proposal_ix(&school.pubkey(), Role::ModuleBooker, 1, 0, 10), &school, &[&school]);
     ok(&mut w.svm, vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000), &voter, &[&voter]);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey(), &authority), &cranker, &[&cranker]);
+    ok(&mut w.svm, finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey()), &cranker, &[&cranker]);
 
     // A creator reserves and uploads; the deposit is now riding on the proposal.
     ok(&mut w.svm, claim_proposal_ix(&creator.pubkey(), 0), &creator, &[&creator]);
@@ -357,9 +348,9 @@ fn expire_slashes_riding_deposit() {
 
     // The build window lapses with no mint: expiring it slashes the riding
     // deposit to the treasury.
-    let treasury_before = balance(&w.svm, &xcav_mint(), &authority);
+    let treasury_before = treasury_balance(&w.svm);
     warp_past_voting(&mut w.svm);
-    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0, &authority), &cranker, &[&cranker]);
-    assert_eq!(balance(&w.svm, &xcav_mint(), &authority) - treasury_before, MODULE_DEPOSIT);
+    ok(&mut w.svm, expire_proposal_ix(&cranker.pubkey(), 0), &cranker, &[&cranker]);
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, MODULE_DEPOSIT);
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
 }

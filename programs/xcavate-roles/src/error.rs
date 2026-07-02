@@ -11,4 +11,7 @@ pub enum RolesError {
     /// The new authority cannot be the zero address.
     #[msg("Invalid authority address")]
     InvalidAuthority,
+    /// The signer is not the program's upgrade authority.
+    #[msg("Signer is not the program upgrade authority")]
+    NotUpgradeAuthority,
 }

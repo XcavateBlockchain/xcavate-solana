@@ -6,7 +6,8 @@ use crate::error::EducationError;
 use crate::state::{Config, Deliverer};
 use crate::vault::{lock_to_vault, release_from_vault};
 
-use xcavate_roles::state::{Role, RoleAccount};
+use xcavate_roles::program::XcavateRoles;
+use xcavate_roles::state::{Config as RolesConfig, Role, RoleAccount};
 
 /// Register as a module deliverer, or top the deposit back up to the current
 /// requirement. ModuleDeliverer-only; locks the deposit in the vault.
@@ -103,9 +104,10 @@ pub fn register_deliverer_handler(ctx: Context<RegisterDeliverer>) -> Result<()>
     Ok(())
 }
 
-/// Unregister as a deliverer and withdraw the deposit. ModuleDeliverer-only and
-/// only with no active claims. The ModuleDeliverer role itself is managed in the
-/// roles program and is left untouched here.
+/// Unregister as a deliverer and withdraw the deposit. Requires no active
+/// claims, and renounces the ModuleDeliverer role if it is still held, so
+/// strikes can't be shed by cycling out and back in. The role account is
+/// optional so a deliverer who already gave it up can still get their deposit.
 #[derive(Accounts)]
 pub struct UnregisterDeliverer<'info> {
     #[account(mut)]
@@ -113,6 +115,30 @@ pub struct UnregisterDeliverer<'info> {
 
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
+
+    #[account(
+        mut,
+        seeds = [
+            xcavate_roles::ROLE_SEED,
+            deliverer_signer.key().as_ref(),
+            &[Role::ModuleDeliverer.seed_byte()],
+        ],
+        bump = deliverer_role.bump,
+        seeds::program = xcavate_roles::ID,
+    )]
+    pub deliverer_role: Option<Box<Account<'info, RoleAccount>>>,
+
+    #[account(
+        seeds = [xcavate_roles::CONFIG_SEED],
+        bump = roles_config.bump,
+        seeds::program = xcavate_roles::ID,
+    )]
+    pub roles_config: Box<Account<'info, RolesConfig>>,
+
+    /// CHECK: rent destination for the renounced role account, pinned to the
+    /// roles program's configured authority.
+    #[account(mut, address = roles_config.authority)]
+    pub roles_authority: UncheckedAccount<'info>,
 
     #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
     pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
@@ -142,6 +168,7 @@ pub struct UnregisterDeliverer<'info> {
     pub deliverer: Box<Account<'info, Deliverer>>,
 
     pub token_program: Interface<'info, TokenInterface>,
+    pub roles_program: Program<'info, XcavateRoles>,
 }
 
 pub fn unregister_deliverer_handler(ctx: Context<UnregisterDeliverer>) -> Result<()> {
@@ -160,6 +187,24 @@ pub fn unregister_deliverer_handler(ctx: Context<UnregisterDeliverer>) -> Result
         ctx.accounts.deliverer.deposit,
         ctx.accounts.xcav_mint.decimals,
     )?;
+
+    // Renounce the role if it is still held. A deliverer who already gave it
+    // up reaches here with no role account and just recovers their deposit;
+    // they still need a fresh admin grant to register again.
+    if let Some(deliverer_role) = ctx.accounts.deliverer_role.as_ref() {
+        xcavate_roles::cpi::renounce_role(
+            CpiContext::new(
+                ctx.accounts.roles_program.key(),
+                xcavate_roles::cpi::accounts::RenounceRole {
+                    user: ctx.accounts.deliverer_signer.to_account_info(),
+                    config: ctx.accounts.roles_config.to_account_info(),
+                    authority: ctx.accounts.roles_authority.to_account_info(),
+                    role_account: deliverer_role.to_account_info(),
+                },
+            ),
+            Role::ModuleDeliverer,
+        )?;
+    }
 
     emit!(DelivererUnregistered {
         deliverer: ctx.accounts.deliverer_signer.key(),

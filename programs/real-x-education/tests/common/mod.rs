@@ -65,6 +65,38 @@ pub fn eid() -> Pubkey {
 pub fn roles_id() -> Pubkey {
     xcavate_roles::id()
 }
+// The protocol-wide treasury: the regions program's treasury vault.
+pub fn treasury_pda() -> Pubkey {
+    Pubkey::find_program_address(&[education_regions::TREASURY_SEED], &regions_id()).0
+}
+
+pub fn treasury_balance(svm: &LiteSVM) -> u64 {
+    spl_amount(svm, &treasury_pda())
+}
+
+// Seed the shared treasury token account (owned by the regions config PDA).
+pub fn set_treasury(svm: &mut LiteSVM) {
+    let regions_config =
+        Pubkey::find_program_address(&[education_regions::CONFIG_SEED], &regions_id()).0;
+    let acc = SplAccount {
+        mint: xcav_mint(),
+        owner: regions_config,
+        amount: 0,
+        delegate: COption::None,
+        state: AccountState::Initialized,
+        is_native: COption::None,
+        delegated_amount: 0,
+        close_authority: COption::None,
+    };
+    let mut data = vec![0u8; SplAccount::LEN];
+    acc.pack_into_slice(&mut data);
+    svm.set_account(
+        treasury_pda(),
+        Account { lamports: 100_000_000, data, owner: TOKEN_PROGRAM_ID, executable: false, rent_epoch: 0 },
+    )
+    .unwrap();
+}
+
 pub fn regions_id() -> Pubkey {
     education_regions::id()
 }
@@ -285,8 +317,14 @@ pub fn roles_init_ix(authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         roles_id(),
         &xcavate_roles::instruction::InitializeConfig {}.data(),
-        xcavate_roles::accounts::InitializeConfig { authority: *authority, config: roles_config(), system_program: SYS }
-            .to_account_metas(None),
+        xcavate_roles::accounts::InitializeConfig {
+            authority: *authority,
+            program: roles_id(),
+            program_data: program_data_pda(&roles_id()),
+            config: roles_config(),
+            system_program: SYS,
+        }
+        .to_account_metas(None),
     )
 }
 pub fn roles_add_admin_ix(authority: &Pubkey, new_admin: &Pubkey) -> Instruction {
@@ -303,6 +341,20 @@ pub fn roles_add_admin_ix(authority: &Pubkey, new_admin: &Pubkey) -> Instruction
         .to_account_metas(None),
     )
 }
+pub fn roles_remove_ix(admin: &Pubkey, user: &Pubkey, role: Role) -> Instruction {
+    Instruction::new_with_bytes(
+        roles_id(),
+        &xcavate_roles::instruction::RemoveRole { role }.data(),
+        xcavate_roles::accounts::RemoveRole {
+            admin_signer: *admin,
+            admin: admin_pda(admin),
+            user: *user,
+            role_account: role_pda(user, role),
+        }
+        .to_account_metas(None),
+    )
+}
+
 pub fn roles_assign_ix(admin: &Pubkey, user: &Pubkey, role: Role) -> Instruction {
     Instruction::new_with_bytes(
         roles_id(),
@@ -349,15 +401,37 @@ pub fn default_params() -> ConfigParams {
     }
 }
 
+// The programdata account the upgradeable loader keeps beside each program.
+pub fn program_data_pda(program_id: &Pubkey) -> Pubkey {
+    Pubkey::find_program_address(
+        &[program_id.as_ref()],
+        &anchor_lang::solana_program::bpf_loader_upgradeable::ID,
+    )
+    .0
+}
+
+// Point a deployed program's upgrade authority at `authority` so the
+// authority-bound initialize passes. The loader metadata is 4 bytes of enum
+// tag, 8 of slot, then an optional pubkey.
+pub fn bind_upgrade_authority(svm: &mut LiteSVM, program_id: &Pubkey, authority: &Pubkey) {
+    let pd = program_data_pda(program_id);
+    let mut acc = svm.get_account(&pd).unwrap();
+    acc.data[12] = 1;
+    acc.data[13..45].copy_from_slice(authority.as_ref());
+    svm.set_account(pd, acc).unwrap();
+}
+
 pub fn edu_init_ix(authority: &Pubkey, protocol: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::InitializeConfig { params: default_params() }.data(),
         real_x_education::accounts::InitializeConfig {
             authority: *authority,
+            program: eid(),
+            program_data: program_data_pda(&eid()),
             config: config_pda(),
             xcav_mint: xcav_mint(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             protocol_authority: *protocol,
             vault: vault(),
             token_program: TOKEN_PROGRAM_ID,
@@ -469,7 +543,7 @@ pub fn claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> Instructi
     )
 }
 
-pub fn cancel_claim_ix(lecturer: &Pubkey, authority: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
+pub fn cancel_claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::CancelClaim { module_id, booking_id }.data(),
@@ -482,7 +556,7 @@ pub fn cancel_claim_ix(lecturer: &Pubkey, authority: &Pubkey, module_id: u64, bo
             booking: booking_pda(module_id, booking_id),
             xcav_mint: xcav_mint(),
             vault: vault(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -534,6 +608,7 @@ pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instructio
         &real_x_education::instruction::FinishBookingProcess { module_id, booking_id }.data(),
         real_x_education::accounts::FinishBooking {
             school: *school,
+            school_role: role_pda(school, Role::ModuleBooker),
             config: config_pda(),
             xcav_mint: xcav_mint(),
             vault: vault(),
@@ -633,7 +708,7 @@ pub fn vote_ix(voter: &Pubkey, proposal_id: u64, vote: ModuleVote, amount: u64) 
     )
 }
 
-pub fn finalize_proposal_ix(cranker: &Pubkey, proposal_id: u64, proposer: &Pubkey, authority: &Pubkey) -> Instruction {
+pub fn finalize_proposal_ix(cranker: &Pubkey, proposal_id: u64, proposer: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::FinalizeProposal { proposal_id }.data(),
@@ -645,7 +720,7 @@ pub fn finalize_proposal_ix(cranker: &Pubkey, proposal_id: u64, proposer: &Pubke
             proposal: proposal_pda(proposal_id),
             proposer: *proposer,
             proposer_xcav: token_acc(&xcav_mint(), proposer),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -682,7 +757,7 @@ pub fn upload_proposal_ix(claimant: &Pubkey, proposal_id: u64) -> Instruction {
     )
 }
 
-pub fn release_claim_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey) -> Instruction {
+pub fn release_claim_ix(cranker: &Pubkey, proposal_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::ReleaseClaim { proposal_id }.data(),
@@ -691,7 +766,7 @@ pub fn release_claim_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey) 
             config: config_pda(),
             xcav_mint: xcav_mint(),
             vault: vault(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             proposal: proposal_pda(proposal_id),
             token_program: TOKEN_PROGRAM_ID,
         }
@@ -699,7 +774,7 @@ pub fn release_claim_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey) 
     )
 }
 
-pub fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool, authority: &Pubkey) -> Instruction {
+pub fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::ReviewProposal { proposal_id, passed }.data(),
@@ -708,7 +783,7 @@ pub fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool, author
             config: config_pda(),
             xcav_mint: xcav_mint(),
             vault: vault(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             agent_role: role_pda(agent, Role::ModuleAIAgent),
             proposal: proposal_pda(proposal_id),
             token_program: TOKEN_PROGRAM_ID,
@@ -813,7 +888,7 @@ pub fn unlock_vote_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
     )
 }
 
-pub fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey) -> Instruction {
+pub fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::ExpireProposal { proposal_id }.data(),
@@ -822,7 +897,7 @@ pub fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64, authority: &Pubkey
             config: config_pda(),
             xcav_mint: xcav_mint(),
             vault: vault(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             proposal: proposal_pda(proposal_id),
             token_program: TOKEN_PROGRAM_ID,
         }
@@ -880,7 +955,11 @@ pub fn setup() -> World {
     set_mint_dec(&mut svm, gbp_mint(), GBP_DECIMALS);
 
     let authority = funded(&mut svm);
-    give(&mut svm, &xcav_mint(), &authority.pubkey(), 0); // XCAV treasury
+    bind_upgrade_authority(&mut svm, &roles_id(), &authority.pubkey());
+    bind_upgrade_authority(&mut svm, &eid(), &authority.pubkey());
+    // The shared protocol treasury lives at the regions program's treasury
+    // PDA; seed an empty XCAV account there.
+    set_treasury(&mut svm);
     ok(&mut svm, roles_init_ix(&authority.pubkey()), &authority, &[&authority]);
 
     let admin = funded(&mut svm);
@@ -963,7 +1042,7 @@ pub fn update_config_ix(authority: &Pubkey, protocol: &Pubkey, params: ConfigPar
             authority: *authority,
             config: config_pda(),
             xcav_mint: xcav_mint(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             protocol_authority: *protocol,
         }
         .to_account_metas(None),
@@ -1021,7 +1100,6 @@ pub fn cancel_booking_ix(
     module_id: u64,
     sponsor_id: u64,
     booking_id: u64,
-    authority: &Pubkey,
     deliverer: Option<&Pubkey>,
 ) -> Instruction {
     Instruction::new_with_bytes(
@@ -1035,7 +1113,7 @@ pub fn cancel_booking_ix(
             booking: booking_pda(module_id, booking_id),
             xcav_mint: xcav_mint(),
             vault: vault(),
-            treasury: token_acc(&xcav_mint(), authority),
+            treasury: treasury_pda(),
             school_xcav: token_acc(&xcav_mint(), school),
             counter: counter_pda(school),
             cancellation: cancellation_pda(school, booking_id),
@@ -1066,18 +1144,28 @@ pub fn clear_old_cancellation_ix(school: &Pubkey, booking_id: u64) -> Instructio
     )
 }
 
-pub fn unregister_deliverer_ix(lecturer: &Pubkey) -> Instruction {
+pub fn unregister_deliverer_ix(lecturer: &Pubkey, roles_authority: &Pubkey) -> Instruction {
+    unregister_deliverer_ix_opt(lecturer, roles_authority, true)
+}
+
+// `with_role` false omits the role account (Anchor `None`), for the case where
+// the deliverer already gave the role up and is only recovering the deposit.
+pub fn unregister_deliverer_ix_opt(lecturer: &Pubkey, roles_authority: &Pubkey, with_role: bool) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::UnregisterModuleDeliverer {}.data(),
         real_x_education::accounts::UnregisterDeliverer {
             deliverer_signer: *lecturer,
             config: config_pda(),
+            deliverer_role: with_role.then(|| role_pda(lecturer, Role::ModuleDeliverer)),
+            roles_config: roles_config(),
+            roles_authority: *roles_authority,
             xcav_mint: xcav_mint(),
             vault: vault(),
             deliverer_xcav: token_acc(&xcav_mint(), lecturer),
             deliverer: deliverer_pda(lecturer),
             token_program: TOKEN_PROGRAM_ID,
+            roles_program: roles_id(),
         }
         .to_account_metas(None),
     )

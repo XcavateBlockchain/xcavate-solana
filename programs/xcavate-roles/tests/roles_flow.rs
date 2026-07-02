@@ -38,12 +38,34 @@ fn role_pda(user: &Pubkey, role: Role) -> Pubkey {
 
 // --- instruction builders ---
 
+// The programdata account the upgradeable loader keeps beside the program.
+fn program_data_pda() -> Pubkey {
+    Pubkey::find_program_address(
+        &[pid().as_ref()],
+        &anchor_lang::solana_program::bpf_loader_upgradeable::ID,
+    )
+    .0
+}
+
+// Point the program's upgrade authority at `authority` so the authority-bound
+// initialize passes. The loader metadata is 4 bytes of enum tag, 8 of slot,
+// then an optional pubkey.
+fn bind_upgrade_authority(svm: &mut LiteSVM, authority: &Pubkey) {
+    let pd = program_data_pda();
+    let mut acc = svm.get_account(&pd).unwrap();
+    acc.data[12] = 1;
+    acc.data[13..45].copy_from_slice(authority.as_ref());
+    svm.set_account(pd, acc).unwrap();
+}
+
 fn init_ix(authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         pid(),
         &xcavate_roles::instruction::InitializeConfig {}.data(),
         xcavate_roles::accounts::InitializeConfig {
             authority: *authority,
+            program: pid(),
+            program_data: program_data_pda(),
             config: config_pda(),
             system_program: SYS,
         }
@@ -116,6 +138,20 @@ fn set_perm_ix(admin: &Pubkey, user: &Pubkey, role: Role, permission: AccessPerm
             admin_signer: *admin,
             admin: admin_pda(admin),
             user: *user,
+            role_account: role_pda(user, role),
+        }
+        .to_account_metas(None),
+    )
+}
+
+fn renounce_ix(user: &Pubkey, authority: &Pubkey, role: Role) -> Instruction {
+    Instruction::new_with_bytes(
+        pid(),
+        &xcavate_roles::instruction::RenounceRole { role }.data(),
+        xcavate_roles::accounts::RenounceRole {
+            user: *user,
+            config: config_pda(),
+            authority: *authority,
             role_account: role_pda(user, role),
         }
         .to_account_metas(None),
@@ -195,6 +231,7 @@ fn setup() -> (LiteSVM, Keypair) {
     )
     .unwrap();
     let authority = funded(&mut svm);
+    bind_upgrade_authority(&mut svm, &authority.pubkey());
     ok(&mut svm, init_ix(&authority.pubkey()), &authority, &[&authority]);
     (svm, authority)
 }
@@ -327,6 +364,64 @@ fn remove_role_fails_when_not_assigned() {
     fails_with(&mut svm, remove_role_ix(&admin.pubkey(), &user, Role::ModuleSponsor), &admin, &[&admin], "AccountNotInitialized");
 }
 
+// ============================ renounce_role ============================
+
+#[test]
+fn renounce_role_works() {
+    let (mut svm, authority, admin) = setup_with_admin();
+    let user = funded(&mut svm);
+    ok(&mut svm, assign_ix(&admin.pubkey(), &user.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
+
+    // The holder gives the role up themselves; the rent goes to the
+    // authority, not the holder, since an admin paid it at assignment.
+    let user_before = svm.get_account(&user.pubkey()).unwrap().lamports;
+    let auth_before = svm.get_account(&authority.pubkey()).unwrap().lamports;
+    ok(&mut svm, renounce_ix(&user.pubkey(), &authority.pubkey(), Role::ModuleDeliverer), &user, &[&user]);
+    assert!(svm.get_account(&role_pda(&user.pubkey(), Role::ModuleDeliverer)).map_or(true, |a| a.data.is_empty()));
+    assert!(svm.get_account(&authority.pubkey()).unwrap().lamports > auth_before);
+    assert!(svm.get_account(&user.pubkey()).unwrap().lamports <= user_before);
+}
+
+#[test]
+fn renounce_role_fails_when_not_assigned() {
+    let (mut svm, authority, _admin) = setup_with_admin();
+    let user = funded(&mut svm);
+    fails_with(&mut svm, renounce_ix(&user.pubkey(), &authority.pubkey(), Role::ModuleSponsor), &user, &[&user], "AccountNotInitialized");
+}
+
+#[test]
+fn renounce_role_cannot_target_another_user() {
+    let (mut svm, authority, admin) = setup_with_admin();
+    let victim = Keypair::new().pubkey();
+    ok(&mut svm, assign_ix(&admin.pubkey(), &victim, Role::ModuleSponsor), &admin, &[&admin]);
+
+    // The role account seed is bound to the signer, so pointing the
+    // instruction at someone else's role account cannot derive.
+    let attacker = funded(&mut svm);
+    let ix = Instruction::new_with_bytes(
+        pid(),
+        &xcavate_roles::instruction::RenounceRole { role: Role::ModuleSponsor }.data(),
+        xcavate_roles::accounts::RenounceRole {
+            user: attacker.pubkey(),
+            config: config_pda(),
+            authority: authority.pubkey(),
+            role_account: role_pda(&victim, Role::ModuleSponsor),
+        }
+        .to_account_metas(None),
+    );
+    fails_with(&mut svm, ix, &attacker, &[&attacker], "ConstraintSeeds");
+}
+
+#[test]
+fn renounce_role_rejects_wrong_rent_destination() {
+    let (mut svm, _authority, admin) = setup_with_admin();
+    let user = funded(&mut svm);
+    ok(&mut svm, assign_ix(&admin.pubkey(), &user.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
+
+    // Redirecting the rent anywhere but the configured authority is refused.
+    fails_with(&mut svm, renounce_ix(&user.pubkey(), &user.pubkey(), Role::ModuleDeliverer), &user, &[&user], "ConstraintAddress");
+}
+
 // ============================ set_permission ============================
 
 #[test]
@@ -454,4 +549,25 @@ fn removed_admin_loses_power() {
         &[&admin],
         "AccountNotInitialized",
     );
+}
+
+// ============================ initialize gating ============================
+
+#[test]
+fn initialize_config_requires_upgrade_authority() {
+    let mut svm = LiteSVM::new();
+    svm.add_program(
+        pid(),
+        include_bytes!("../../../target/deploy/xcavate_roles.so"),
+    )
+    .unwrap();
+    let deployer = funded(&mut svm);
+    bind_upgrade_authority(&mut svm, &deployer.pubkey());
+
+    // Someone other than the deployer cannot claim the config.
+    let imposter = funded(&mut svm);
+    fails_with(&mut svm, init_ix(&imposter.pubkey()), &imposter, &[&imposter], "NotUpgradeAuthority");
+
+    // The deployer can.
+    ok(&mut svm, init_ix(&deployer.pubkey()), &deployer, &[&deployer]);
 }

@@ -5,6 +5,13 @@ use crate::constants::{CONFIG_SEED, VAULT_SEED};
 use crate::error::EducationError;
 use crate::state::Config;
 
+/// The protocol-wide treasury: the regions program's treasury vault, so every
+/// slash across the protocol lands in one pot. Transfers in need no authority;
+/// only the regions program can pay out.
+pub fn protocol_treasury() -> Pubkey {
+    Pubkey::find_program_address(&[education_regions::TREASURY_SEED], &education_regions::ID).0
+}
+
 /// Protocol parameters. The treasury is supplied as a validated XCAV token
 /// account so it can't be pointed at the wrong mint.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
@@ -102,15 +109,21 @@ impl ConfigParams {
 }
 
 /// Creates the singleton config, sets the authority to the signer, and opens the
-/// XCAV escrow vault.
-///
-/// First caller becomes the authority, so run this in the deploy script.
-/// Before mainnet, bind it to the program's upgrade authority by loading the
-/// `ProgramData` account and checking `upgrade_authority_address`.
+/// XCAV escrow vault. Only the program's upgrade authority can call this, so
+/// the config can't be claimed by a front-runner between deploy and
+/// initialization.
 #[derive(Accounts)]
 pub struct InitializeConfig<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    /// This program's executable account, tying `program_data` to it.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ EducationError::NotUpgradeAuthority)]
+    pub program: Program<'info, crate::program::RealXEducation>,
+
+    /// The program's upgrade authority must be the initializing signer.
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ EducationError::NotUpgradeAuthority)]
+    pub program_data: Account<'info, ProgramData>,
 
     #[account(
         init,
@@ -124,8 +137,12 @@ pub struct InitializeConfig<'info> {
     /// The XCAV mint staked for deposits.
     pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
 
-    /// The treasury that receives slashed deposits; must be an XCAV account.
-    #[account(token::mint = xcav_mint)]
+    /// The shared protocol treasury, pinned to the regions program's treasury
+    /// vault; receives slashed deposits.
+    #[account(
+        token::mint = xcav_mint,
+        address = protocol_treasury() @ EducationError::InvalidTreasury,
+    )]
     pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Owner of the protocol's per-asset fee token accounts.
@@ -149,6 +166,7 @@ pub struct InitializeConfig<'info> {
 
 pub fn handler(ctx: Context<InitializeConfig>, params: ConfigParams) -> Result<()> {
     params.validate()?;
+    crate::mint_guard::require_supported_mint(&ctx.accounts.xcav_mint.to_account_info())?;
 
     let config = &mut ctx.accounts.config;
     config.authority = ctx.accounts.authority.key();
@@ -189,8 +207,12 @@ pub struct UpdateConfig<'info> {
     #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
     pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
 
-    /// The treasury that receives slashed deposits; must be an XCAV account.
-    #[account(token::mint = config.xcav_mint)]
+    /// The shared protocol treasury, pinned to the regions program's treasury
+    /// vault; receives slashed deposits.
+    #[account(
+        token::mint = config.xcav_mint,
+        address = protocol_treasury() @ EducationError::InvalidTreasury,
+    )]
     pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Owner of the protocol's per-asset fee token accounts.

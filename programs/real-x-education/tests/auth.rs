@@ -87,7 +87,6 @@ fn cancel_booking_wrong_school_fails() {
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
     let other = with_role(&mut w, Role::ModuleBooker);
-    let authority = w.authority.pubkey();
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 5), &sponsor, &[&sponsor]);
     ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
@@ -95,7 +94,7 @@ fn cancel_booking_wrong_school_fails() {
     // Another ModuleBooker cannot cancel a booking they did not create.
     err(
         &mut w.svm,
-        cancel_booking_ix(&other.pubkey(), 0, 0, 0, &authority, None),
+        cancel_booking_ix(&other.pubkey(), 0, 0, 0, None),
         &other,
         &[&other],
         "NoPermission",
@@ -110,7 +109,6 @@ fn cancel_claim_wrong_lecturer_fails() {
     let school = with_role(&mut w, Role::ModuleBooker);
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
     let other = with_role(&mut w, Role::ModuleDeliverer);
-    let authority = w.authority.pubkey();
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 5), &sponsor, &[&sponsor]);
     ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
@@ -121,7 +119,7 @@ fn cancel_claim_wrong_lecturer_fails() {
     // A different registered lecturer cannot cancel someone else's claim.
     err(
         &mut w.svm,
-        cancel_claim_ix(&other.pubkey(), &authority, 0, 0),
+        cancel_claim_ix(&other.pubkey(), 0, 0),
         &other,
         &[&other],
         "NoPermission",
@@ -303,7 +301,6 @@ fn cancel_booking_after_claim_decrements_claims() {
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
-    let authority = w.authority.pubkey();
     ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
     ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 5), &sponsor, &[&sponsor]);
     ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
@@ -317,7 +314,7 @@ fn cancel_booking_after_claim_decrements_claims() {
     // rolled back and the student allocation stays put (it moved at claim time).
     ok(
         &mut w.svm,
-        cancel_booking_ix(&school.pubkey(), 0, 0, 0, &authority, Some(&lecturer.pubkey())),
+        cancel_booking_ix(&school.pubkey(), 0, 0, 0, Some(&lecturer.pubkey())),
         &school,
         &[&school],
     );
@@ -325,4 +322,37 @@ fn cancel_booking_after_claim_decrements_claims() {
     assert_eq!(deliverer_of(&w.svm, &lecturer.pubkey()).active_claims, 0);
     assert_eq!(module_of(&w.svm, 0).student_allocation, student_after_claim);
     assert!(closed(&w.svm, &booking_pda(0, 0)));
+}
+
+#[test]
+fn finish_booking_requires_booker_role() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+    let agent = with_role(&mut w, Role::ModuleAIAgent);
+    let operator = w.operator.pubkey();
+    let protocol = w.protocol.pubkey();
+
+    ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
+    ok(&mut w.svm, sponsor_ix(&sponsor.pubkey(), 0, 0, 1), &sponsor, &[&sponsor]);
+    ok(&mut w.svm, book_ix(&school.pubkey(), 0, 0, 0), &school, &[&school]);
+    ok(&mut w.svm, register_deliverer_ix(&lecturer.pubkey()), &lecturer, &[&lecturer]);
+    ok(&mut w.svm, claim_ix(&lecturer.pubkey(), 0, 0), &lecturer, &[&lecturer]);
+    ok(
+        &mut w.svm,
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000, 1, &creator.pubkey(), &operator, &protocol, &lecturer.pubkey(), &sponsor.pubkey()),
+        &agent,
+        &[&agent],
+    );
+
+    // The school loses its role before settling; the deposit stays locked
+    // until the role is granted again.
+    let admin = w.admin.insecure_clone();
+    ok(&mut w.svm, roles_remove_ix(&admin.pubkey(), &school.pubkey(), Role::ModuleBooker), &admin, &[&admin]);
+    err(&mut w.svm, finish_ix(&school.pubkey(), 0, 0), &school, &[&school], "AccountNotInitialized");
+
+    ok(&mut w.svm, roles_assign_ix(&admin.pubkey(), &school.pubkey(), Role::ModuleBooker), &admin, &[&admin]);
+    ok(&mut w.svm, finish_ix(&school.pubkey(), 0, 0), &school, &[&school]);
 }

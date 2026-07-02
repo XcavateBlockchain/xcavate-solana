@@ -215,13 +215,14 @@ pub struct FinalizeReplacement<'info> {
     pub auction: Box<Account<'info, ReplacementAuction>>,
 
     /// The outgoing operator's XCAV account; receives their returned collateral
-    /// when the seat changes hands.
+    /// when the seat changes hands. Optional so a no-bidder auction can be
+    /// cranked without it; required whenever there is a winner.
     #[account(
         mut,
         token::mint = config.xcav_mint,
         token::authority = region.owner,
     )]
-    pub old_owner_token: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub old_owner_token: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
@@ -242,11 +243,16 @@ pub fn finalize_replacement_handler(
         let outgoing_collateral = ctx.accounts.region.collateral;
 
         // Return the outgoing operator's collateral from the vault.
+        let old_owner_token = ctx
+            .accounts
+            .old_owner_token
+            .as_ref()
+            .ok_or(RegionsError::MissingRecipientToken)?;
         release_from_vault(
             &ctx.accounts.token_program.to_account_info(),
             &ctx.accounts.vault.to_account_info(),
             &ctx.accounts.xcav_mint.to_account_info(),
-            &ctx.accounts.old_owner_token.to_account_info(),
+            &old_owner_token.to_account_info(),
             &ctx.accounts.config.to_account_info(),
             config_bump,
             outgoing_collateral,

@@ -184,7 +184,7 @@ fn vote_with_insufficient_balance_fails() {
 
 #[test]
 fn finalize_passes_and_starts_auction() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
 
@@ -196,7 +196,7 @@ fn finalize_passes_and_starts_auction() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -213,17 +213,17 @@ fn finalize_passes_and_starts_auction() {
 
 #[test]
 fn finalize_rejects_and_slashes_deposit() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
     // No votes -> quorum not met -> rejected.
 
-    let treasury_before = xcav_balance(&svm, &authority.pubkey());
+    let treasury_before = treasury_balance(&svm);
     warp_past_voting(&mut svm);
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -231,20 +231,20 @@ fn finalize_rejects_and_slashes_deposit() {
     let rs = region_state_of(&svm, 1);
     assert_eq!(rs.status, RegionStatus::Rejected);
     // Deposit slashed from the vault to the treasury.
-    assert_eq!(xcav_balance(&svm, &authority.pubkey()) - treasury_before, DEPOSIT);
+    assert_eq!(treasury_balance(&svm) - treasury_before, DEPOSIT);
     assert_eq!(vault_balance(&svm), 0);
 }
 
 #[test]
 fn finalize_fails_while_voting_ongoing() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
 
     let cranker = funded(&mut svm);
     fails_with(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
         "VotingStillOngoing",
@@ -311,7 +311,7 @@ fn unlock_without_vote_fails() {
 
 #[test]
 fn clear_region_state_after_reject() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
     // No votes -> rejected on finalize.
@@ -319,7 +319,7 @@ fn clear_region_state_after_reject() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -333,7 +333,7 @@ fn clear_region_state_after_reject() {
 
 #[test]
 fn finalize_all_abstain_passes_if_quorum() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
 
@@ -345,7 +345,7 @@ fn finalize_all_abstain_passes_if_quorum() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -354,7 +354,7 @@ fn finalize_all_abstain_passes_if_quorum() {
 
 #[test]
 fn finalize_exact_threshold_passes() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
 
@@ -367,7 +367,7 @@ fn finalize_exact_threshold_passes() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -376,7 +376,7 @@ fn finalize_exact_threshold_passes() {
 
 #[test]
 fn finalize_below_threshold_rejects() {
-    let (mut svm, operator, authority) = setup();
+    let (mut svm, operator, _authority) = setup();
     let id = next_proposal_id(&svm);
     ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
 
@@ -389,7 +389,7 @@ fn finalize_below_threshold_rejects() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -402,7 +402,7 @@ fn finalize_below_quorum_rejects() {
     // Raise the quorum above a single vote so a lone yes cannot reach it.
     let mut params = default_params();
     params.quorum = 300_000_000;
-    ok(&mut svm, update_config_ix(&authority.pubkey(), &authority.pubkey(), params), &authority, &[&authority]);
+    ok(&mut svm, update_config_ix(&authority.pubkey(), params), &authority, &[&authority]);
 
     let operator = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
@@ -414,9 +414,113 @@ fn finalize_below_quorum_rejects() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey(), &authority.pubkey()),
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
         &cranker,
         &[&cranker],
     );
     assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+}
+
+#[test]
+fn finalize_exact_quorum_rejects() {
+    let (mut svm, _operator, authority) = setup();
+    // The quorum is strict: a turnout exactly at the quorum is not enough.
+    let mut params = default_params();
+    params.quorum = 200_000_000;
+    ok(&mut svm, update_config_ix(&authority.pubkey(), params), &authority, &[&authority]);
+
+    let operator = new_operator(&mut svm, &authority);
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+}
+
+#[test]
+fn finalize_reject_without_proposer_token_works() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    warp_past_voting(&mut svm);
+
+    // Rejection slashes to the treasury, so the crank settles even with no
+    // proposer token account at all.
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_no_token_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+    assert_eq!(treasury_balance(&svm), DEPOSIT);
+}
+
+#[test]
+fn finalize_pass_requires_proposer_token() {
+    let (mut svm, operator, _authority) = setup();
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    warp_past_voting(&mut svm);
+
+    // A passing proposal pays the deposit back, so the account is mandatory.
+    let cranker = funded(&mut svm);
+    fails_with(
+        &mut svm,
+        finalize_no_token_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
+        &cranker,
+        &[&cranker],
+        "MissingRecipientToken",
+    );
+}
+
+#[test]
+fn finalize_pass_pays_treasury_reward() {
+    let (mut svm, operator, _authority) = setup();
+    // A funded treasury matches the returned deposit with a reward.
+    fund_treasury(&mut svm, 2 * DEPOSIT);
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+
+    let op_before = xcav_balance(&svm, &operator.pubkey());
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(&mut svm, finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()), &cranker, &[&cranker]);
+
+    // Deposit back plus the deposit-matching reward.
+    assert_eq!(xcav_balance(&svm, &operator.pubkey()) - op_before, 2 * DEPOSIT);
+    assert_eq!(treasury_balance(&svm), DEPOSIT);
+}
+
+#[test]
+fn finalize_pass_skips_reward_when_treasury_poor() {
+    let (mut svm, operator, _authority) = setup();
+    // Below the deposit, so no reward is paid and nothing is taken.
+    fund_treasury(&mut svm, DEPOSIT - 1);
+    let id = next_proposal_id(&svm);
+    ok(&mut svm, propose_ix(&operator.pubkey(), 1, id), &operator, &[&operator]);
+    let voter = actor(&mut svm);
+    ok(&mut svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+
+    let op_before = xcav_balance(&svm, &operator.pubkey());
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(&mut svm, finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()), &cranker, &[&cranker]);
+
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Auctioning);
+    assert_eq!(xcav_balance(&svm, &operator.pubkey()) - op_before, DEPOSIT);
+    assert_eq!(treasury_balance(&svm), DEPOSIT - 1);
 }

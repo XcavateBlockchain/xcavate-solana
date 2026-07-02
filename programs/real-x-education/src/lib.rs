@@ -1,6 +1,7 @@
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod mint_guard;
 pub mod minting;
 pub mod pricing;
 pub mod state;

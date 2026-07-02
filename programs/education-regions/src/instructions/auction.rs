@@ -149,12 +149,24 @@ pub fn bid_on_region_handler(ctx: Context<BidOnRegion>, _region_id: u16, amount:
 
 /// Create the region once its auction has ended. Callable by the winning
 /// bidder; their locked bid (already in the vault) becomes the region's
-/// collateral.
+/// collateral. The RegionalOperator role is re-checked here so a winner whose
+/// role was revoked after bidding cannot still take the seat.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct CreateNewRegion<'info> {
     #[account(mut)]
     pub creator: Signer<'info>,
+
+    #[account(
+        seeds = [
+            xcavate_roles::ROLE_SEED,
+            creator.key().as_ref(),
+            &[Role::RegionalOperator.seed_byte()],
+        ],
+        bump = creator_role.bump,
+        seeds::program = xcavate_roles::ID,
+    )]
+    pub creator_role: Box<Account<'info, RoleAccount>>,
 
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,

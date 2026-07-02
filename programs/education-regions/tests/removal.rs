@@ -29,7 +29,7 @@ fn removal_upheld_slashes_collateral_and_adds_strike() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -39,7 +39,7 @@ fn removal_upheld_slashes_collateral_and_adds_strike() {
     assert_eq!(region.active_strikes, 1);
     assert_eq!(region.collateral, 600_000_000 - 100_000_000);
     // Treasury received the slash; challenger's deposit was returned.
-    assert_eq!(xcav_balance(&svm, &authority.pubkey()), 100_000_000);
+    assert_eq!(treasury_balance(&svm), 100_000_000);
     assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before);
     // Removal proposal closed.
     assert!(svm.get_account(&removal_proposal_pda(1)).map_or(true, |a| a.data.is_empty()));
@@ -62,7 +62,7 @@ fn removal_rejected_slashes_proposer() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -72,7 +72,7 @@ fn removal_rejected_slashes_proposer() {
     assert_eq!(region.active_strikes, 0);
     assert_eq!(region.collateral, 600_000_000);
     assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before - DEPOSIT);
-    assert_eq!(xcav_balance(&svm, &authority.pubkey()), DEPOSIT);
+    assert_eq!(treasury_balance(&svm), DEPOSIT);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn removal_reaching_ceiling_opens_seat() {
         let cranker = funded(&mut svm);
         ok(
             &mut svm,
-            finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+            finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey()),
             &cranker,
             &[&cranker],
         );
@@ -176,7 +176,7 @@ fn finalize_removal_fails_while_voting_ongoing() {
     let cranker = funded(&mut svm);
     fails_with(
         &mut svm,
-        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey()),
         &cranker,
         &[&cranker],
         "VotingStillOngoing",
@@ -209,7 +209,7 @@ fn removal_slash_capped_at_collateral() {
     // A strike slash larger than the whole collateral must cap at the collateral.
     let mut params = default_params();
     params.slash_amount = 700_000_000; // > the 600M collateral below
-    ok(&mut svm, update_config_ix(&authority.pubkey(), &authority.pubkey(), params), &authority, &[&authority]);
+    ok(&mut svm, update_config_ix(&authority.pubkey(), params), &authority, &[&authority]);
 
     reach_created(&mut svm, &operator, &authority); // collateral 600M
 
@@ -222,14 +222,14 @@ fn removal_slash_capped_at_collateral() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey()),
         &cranker,
         &[&cranker],
     );
 
     // Collateral floors at zero; only the 600M that existed is slashed, not 700M.
     assert_eq!(region_of(&svm, 1).collateral, 0);
-    assert_eq!(xcav_balance(&svm, &authority.pubkey()), 600_000_000);
+    assert_eq!(treasury_balance(&svm), 600_000_000);
 }
 
 #[test]
@@ -269,7 +269,7 @@ fn removal_rejected_on_quorum_not_met() {
     let cranker = funded(&mut svm);
     ok(
         &mut svm,
-        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey(), &authority.pubkey()),
+        finalize_removal_ix(&cranker.pubkey(), 1, &challenger.pubkey()),
         &cranker,
         &[&cranker],
     );
@@ -278,7 +278,7 @@ fn removal_rejected_on_quorum_not_met() {
     assert_eq!(region.active_strikes, 0);
     assert_eq!(region.collateral, 600_000_000);
     assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before - DEPOSIT);
-    assert_eq!(xcav_balance(&svm, &authority.pubkey()), DEPOSIT);
+    assert_eq!(treasury_balance(&svm), DEPOSIT);
 }
 
 #[test]
