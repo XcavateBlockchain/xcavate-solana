@@ -303,6 +303,9 @@ pub fn create_sponsor_proposal_handler(
             .accepts(&ctx.accounts.payment_mint.key()),
         EducationError::PaymentAssetNotSupported
     );
+    // Reject a payment mint carrying token extensions the escrow accounting can't
+    // support before locking the pre-sponsorship.
+    crate::mint_guard::require_supported_mint(&ctx.accounts.payment_mint.to_account_info())?;
 
     let pre_sponsor_amount = ctx.accounts.config.pre_sponsor_amount;
     require!(pre_sponsor_amount > 0, EducationError::InvalidConfig);
@@ -599,7 +602,9 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
         .ok_or(EducationError::Overflow)?;
     let approval_base = yes.checked_add(no).ok_or(EducationError::Overflow)?;
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
-    let meets_threshold = total != 0
+    // Passing requires real Yes support: abstains count toward quorum but not
+    // toward the approval ratio.
+    let meets_threshold = yes > 0
         && (yes as u128).saturating_mul(10_000)
             >= (approval_base as u128).saturating_mul(threshold_bps);
     let meets_quorum = total >= ctx.accounts.config.quorum;
@@ -632,8 +637,7 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
     // A passed proposal must be built within the claim period; once that passes
     // anyone can expire it so its rent and any pre-sponsorship are recoverable.
     if passed {
-        ctx.accounts.proposal.build_deadline =
-            now.saturating_add(ctx.accounts.config.claim_period);
+        ctx.accounts.proposal.build_deadline = now.saturating_add(ctx.accounts.config.claim_period);
     }
 
     emit!(ProposalFinalized {
@@ -649,10 +653,9 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
 
 /// Claim a passed proposal to reserve the right to build it, locking a bond so
 /// the reservation can't be held for free. The caller must be a ModuleCreator.
-/// A creator-opened proposal can only be built by its proposer;
-/// otherwise any creator may claim it, unless they've already been banned from
-/// it for failing review twice. While a claimant has a retry pending, only they
-/// can re-claim.
+/// A creator-opened proposal can only be built by its proposer; otherwise any
+/// creator may claim it, unless they've already been banned from it for failing
+/// review twice.
 #[derive(Accounts)]
 #[instruction(proposal_id: u64)]
 pub struct ClaimProposal<'info> {
@@ -717,14 +720,18 @@ pub fn claim_proposal_handler(ctx: Context<ClaimProposal>, _proposal_id: u64) ->
         let proposal = &ctx.accounts.proposal;
         // A creator-opened proposal is reserved for its proposer.
         if proposal.proposer_role == Role::ModuleCreator {
-            require!(proposal.proposer == creator, EducationError::NotProposalCreator);
+            require!(
+                proposal.proposer == creator,
+                EducationError::NotProposalCreator
+            );
         }
-        match proposal.claimant {
-            // A retry is pending: only the same claimant may pick it back up.
-            Some(pending) => require!(pending == creator, EducationError::NotProposalCreator),
-            // A fresh claim: the creator must not have been banned from it.
-            None => require!(!proposal.banned.contains(&creator), EducationError::CreatorBanned),
-        }
+        // Every transition into `Claimable` clears the claimant (finalize,
+        // release_claim, second-fail ban), so this is always a fresh reservation:
+        // the creator just must not have been banned after failing review twice.
+        require!(
+            !proposal.banned.contains(&creator),
+            EducationError::CreatorBanned
+        );
     }
 
     // Lock the build bond before recording the reservation.
@@ -741,6 +748,9 @@ pub fn claim_proposal_handler(ctx: Context<ClaimProposal>, _proposal_id: u64) ->
     proposal.claimant = Some(creator);
     proposal.claim_bond = bond;
     proposal.upload_deadline = now.saturating_add(upload_period);
+    // A fresh reservation starts the failure count over, so each claimant is
+    // judged only on their own review attempts.
+    proposal.claimant_failures = 0;
     proposal.status = ProposalStatus::Claimed;
 
     emit!(ProposalClaimed {
@@ -872,10 +882,7 @@ pub fn release_claim_handler(ctx: Context<ReleaseClaim>, proposal_id: u64) -> Re
     proposal.upload_deadline = 0;
     proposal.status = ProposalStatus::Claimable;
 
-    emit!(ProposalClaimReleased {
-        proposal_id,
-        bond,
-    });
+    emit!(ProposalClaimReleased { proposal_id, bond });
     Ok(())
 }
 
@@ -1491,6 +1498,15 @@ pub struct ExpireProposal<'info> {
     )]
     pub proposal: Box<Account<'info, ModuleProposal>>,
 
+    /// The claimant's XCAV account. Required only when the bond is refunded
+    /// rather than slashed (the content was uploaded and the review never came);
+    /// its owner is checked against the proposal's claimant in the handler.
+    #[account(
+        mut,
+        token::mint = config.xcav_mint,
+    )]
+    pub claimant_xcav: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
+
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -1513,16 +1529,40 @@ pub fn expire_proposal_handler(ctx: Context<ExpireProposal>, proposal_id: u64) -
         EducationError::BuildDeadlineNotReached
     );
 
-    // Slash whatever deposit a claimant still has riding on the build.
+    // Settle whatever deposit a claimant still has riding on the build. If the
+    // content was uploaded and is still `UnderReview`, the claimant did their part
+    // and is only waiting on the review, so refund the bond to them. Every other
+    // expirable state (reserved but never uploaded, or approved but never minted)
+    // is the claimant's own stall, so the bond is slashed to the treasury.
     let bond = ctx.accounts.proposal.claim_bond;
     let config_bump = ctx.accounts.config.bump;
     let decimals = ctx.accounts.xcav_mint.decimals;
+    let refund_to_claimant = ctx.accounts.proposal.status == ProposalStatus::UnderReview;
     if bond > 0 {
+        let destination = if refund_to_claimant {
+            let claimant = ctx
+                .accounts
+                .proposal
+                .claimant
+                .ok_or(EducationError::NotProposalCreator)?;
+            let claimant_xcav = ctx
+                .accounts
+                .claimant_xcav
+                .as_ref()
+                .ok_or(EducationError::MissingAccount)?;
+            require!(
+                claimant_xcav.owner == claimant,
+                EducationError::WrongPayoutRecipient
+            );
+            claimant_xcav.to_account_info()
+        } else {
+            ctx.accounts.treasury.to_account_info()
+        };
         release_from_vault(
             &ctx.accounts.token_program.to_account_info(),
             &ctx.accounts.vault.to_account_info(),
             &ctx.accounts.xcav_mint.to_account_info(),
-            &ctx.accounts.treasury.to_account_info(),
+            &destination,
             &ctx.accounts.config.to_account_info(),
             config_bump,
             bond,

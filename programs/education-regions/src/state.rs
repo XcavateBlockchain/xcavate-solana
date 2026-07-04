@@ -36,21 +36,16 @@ pub enum Vote {
 pub struct Config {
     /// Authority allowed to update parameters.
     pub authority: Pubkey,
-    /// The XCAV governance mint staked for proposals, votes, and bids.
+    /// The XCAV governance mint staked for proposals, votes, and operator bonds.
     pub xcav_mint: Pubkey,
     /// XCAV token account that receives slashed deposits.
     pub treasury: Pubkey,
-    /// XCAV locked when proposing a region.
-    pub proposal_deposit: u64,
     /// Minimum XCAV a voter must lock to vote.
     pub minimum_voting_amount: u64,
-    /// Minimum collateral (XCAV) to win a region auction.
-    pub minimum_region_deposit: u64,
     /// Seconds a proposal stays open for voting.
     pub voting_period: i64,
-    /// Seconds a region auction stays open.
-    pub auction_period: i64,
-    /// Minimum time between region-owner changes.
+    /// The operator's term: minimum time before a region's seat can be claimed
+    /// by someone else, and how long a passed proposal has to be claimed.
     pub owner_change_period: i64,
     /// Approval threshold in basis points (yes / (yes + no)).
     pub threshold_bps: u16,
@@ -64,7 +59,8 @@ pub struct Config {
     pub slash_amount: u64,
     /// Notice an operator must give before resigning (seconds).
     pub notice_period: i64,
-    /// Strikes that, once reached, open a region to a replacement auction.
+    /// Strikes that, once reached, open a region's seat for another operator to
+    /// claim.
     pub allowed_strikes: u8,
     /// Monotonic id for the next proposal.
     pub proposal_counter: u64,
@@ -84,8 +80,8 @@ pub struct Region {
 }
 
 /// An open proposal to create a region, with its running vote tally. The
-/// proposer's `deposit` of XCAV is held in the vault and returned (or slashed)
-/// at finalization.
+/// proposer's bond is held in the vault and tracked on the region's
+/// `RegionState`; this account only carries the vote.
 #[account]
 #[derive(InitSpace)]
 pub struct RegionProposal {
@@ -94,29 +90,28 @@ pub struct RegionProposal {
     pub region_id: u16,
     pub created_at: i64,
     pub expiry: i64,
-    pub deposit: u64,
     pub yes_power: u64,
     pub no_power: u64,
     pub abstain_power: u64,
     pub bump: u8,
 }
 
-/// Where a region is in its lifecycle.
+/// Where a region is in its lifecycle before it is created.
 #[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RegionStatus {
     /// A proposal is open for voting.
     Proposing,
-    /// The proposal passed; an auction for the operator slot is running.
-    Auctioning,
+    /// The proposal passed; the proposer can now claim the region (create it).
+    Passed,
     /// The proposal was rejected; the state lingers until cleared so the
     /// region can be proposed again.
     Rejected,
 }
 
-/// One account per region tracking its lifecycle. Created when a region is
-/// proposed and kept (transitioning Proposing -> Auctioning) until the region
-/// is created or the proposal is rejected. Having exactly one of these per
-/// region is what enforces a single in-flight proposal/auction at a time.
+/// One account per region tracking its pre-creation lifecycle. Created when a
+/// region is proposed and kept (transitioning Proposing -> Passed/Rejected)
+/// until the region is created or the state is cleared. Having exactly one of
+/// these per region is what enforces a single in-flight proposal at a time.
 #[account]
 #[derive(InitSpace)]
 pub struct RegionState {
@@ -124,12 +119,15 @@ pub struct RegionState {
     pub status: RegionStatus,
     /// The proposal this region is voting on.
     pub proposal_id: u64,
-    /// Highest bidder once `Auctioning`. Their bid of XCAV is held in the vault.
-    pub highest_bidder: Option<Pubkey>,
-    /// Current highest bid / minimum collateral during the auction.
-    pub collateral: u64,
-    /// When the auction ends (set on transition to `Auctioning`).
-    pub auction_expiry: i64,
+    /// The proposer; on a pass they claim the region, on a stale pass they are
+    /// refunded the bond.
+    pub proposer: Pubkey,
+    /// The proposer's bonded XCAV, held in the vault. Becomes the region's
+    /// collateral on claim, or is refunded on reject / stale pass.
+    pub deposit: u64,
+    /// Once `Passed`, the deadline for the proposer to claim; after it anyone
+    /// can clear the state and the bond is returned.
+    pub claim_deadline: i64,
     pub bump: u8,
 }
 
@@ -151,14 +149,17 @@ pub struct VoteRecord {
 
 /// An open proposal to remove a region's operator, with its running vote tally.
 /// One per region (the PDA is seeded by `region_id`), so a region can only have a
-/// single removal vote in flight at a time. The proposer's `deposit` is held in
-/// the vault and returned if the proposal passes, slashed otherwise.
+/// single removal vote in flight at a time. `target_owner` is the operator the
+/// vote was opened against; if the seat changes hands before finalize the removal
+/// is voided. The proposer's `deposit` is held in the vault and returned if the
+/// proposal passes, slashed otherwise.
 #[account]
 #[derive(InitSpace)]
 pub struct RemovalProposal {
     pub proposal_id: u64,
     pub region_id: u16,
     pub proposer: Pubkey,
+    pub target_owner: Pubkey,
     pub created_at: i64,
     pub expiry: i64,
     pub deposit: u64,
@@ -182,18 +183,9 @@ pub struct RemovalVoteRecord {
     pub bump: u8,
 }
 
-/// An auction to replace a region's operator once the seat is open (after a
-/// successful removal or a resignation notice elapses). One per region. The
-/// leading bid is held in the vault and becomes the new operator's collateral.
-#[account]
-#[derive(InitSpace)]
-pub struct ReplacementAuction {
-    pub region_id: u16,
-    /// Highest bidder so far, if any. Their bid of XCAV is held in the vault.
-    pub highest_bidder: Option<Pubkey>,
-    /// Current highest bid / minimum collateral during the auction.
-    pub collateral: u64,
-    /// When the auction ends.
-    pub auction_expiry: i64,
-    pub bump: u8,
+/// The XCAV bond an operator must lock to run a region: 0.1% of the current
+/// supply. Returns `None` if the supply is too small to produce a positive bond.
+pub fn operator_bond(xcav_supply: u64) -> Option<u64> {
+    let bond = xcav_supply / 1_000;
+    (bond > 0).then_some(bond)
 }

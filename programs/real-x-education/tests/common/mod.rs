@@ -32,8 +32,8 @@ use real_x_education::{
 
 // Re-exported so each test file gets them through `use common::*`.
 pub use anchor_lang::prelude::Pubkey;
-pub use anchor_lang::AccountDeserialize;
 pub use anchor_lang::solana_program::clock::Clock;
+pub use anchor_lang::AccountDeserialize;
 pub use education_regions::state::Region;
 pub use litesvm::LiteSVM;
 pub use real_x_education::instructions::ConfigParams;
@@ -92,7 +92,13 @@ pub fn set_treasury(svm: &mut LiteSVM) {
     acc.pack_into_slice(&mut data);
     svm.set_account(
         treasury_pda(),
-        Account { lamports: 100_000_000, data, owner: TOKEN_PROGRAM_ID, executable: false, rent_epoch: 0 },
+        Account {
+            lamports: 100_000_000,
+            data,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
     )
     .unwrap();
 }
@@ -119,28 +125,44 @@ pub fn module_vault_pda(id: u64) -> Pubkey {
 }
 pub fn sponsorship_pda(module_id: u64, sponsor_id: u64) -> Pubkey {
     Pubkey::find_program_address(
-        &[SPONSORSHIP_SEED, &module_id.to_le_bytes(), &sponsor_id.to_le_bytes()],
+        &[
+            SPONSORSHIP_SEED,
+            &module_id.to_le_bytes(),
+            &sponsor_id.to_le_bytes(),
+        ],
         &eid(),
     )
     .0
 }
 pub fn sponsor_escrow_pda(module_id: u64, sponsor_id: u64) -> Pubkey {
     Pubkey::find_program_address(
-        &[SPONSOR_ESCROW_SEED, &module_id.to_le_bytes(), &sponsor_id.to_le_bytes()],
+        &[
+            SPONSOR_ESCROW_SEED,
+            &module_id.to_le_bytes(),
+            &sponsor_id.to_le_bytes(),
+        ],
         &eid(),
     )
     .0
 }
 pub fn booking_pda(module_id: u64, booking_id: u64) -> Pubkey {
     Pubkey::find_program_address(
-        &[BOOKING_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
+        &[
+            BOOKING_SEED,
+            &module_id.to_le_bytes(),
+            &booking_id.to_le_bytes(),
+        ],
         &eid(),
     )
     .0
 }
 pub fn book_escrow_pda(module_id: u64, booking_id: u64) -> Pubkey {
     Pubkey::find_program_address(
-        &[BOOK_ESCROW_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
+        &[
+            BOOK_ESCROW_SEED,
+            &module_id.to_le_bytes(),
+            &booking_id.to_le_bytes(),
+        ],
         &eid(),
     )
     .0
@@ -153,14 +175,23 @@ pub fn counter_pda(school: &Pubkey) -> Pubkey {
 }
 pub fn cancellation_pda(school: &Pubkey, booking_id: u64) -> Pubkey {
     Pubkey::find_program_address(
-        &[CANCELLATION_SEED, school.as_ref(), &booking_id.to_le_bytes()],
+        &[
+            CANCELLATION_SEED,
+            school.as_ref(),
+            &booking_id.to_le_bytes(),
+        ],
         &eid(),
     )
     .0
 }
 pub fn credential_pda(booking_id: u64, kind: CredentialKind, recipient: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
-        &[CREDENTIAL_SEED, &booking_id.to_le_bytes(), &[kind.seed_byte()], recipient.as_ref()],
+        &[
+            CREDENTIAL_SEED,
+            &booking_id.to_le_bytes(),
+            &[kind.seed_byte()],
+            recipient.as_ref(),
+        ],
         &eid(),
     )
     .0
@@ -195,7 +226,10 @@ pub fn regions_vault() -> Pubkey {
 }
 pub fn region_state_pda(region_id: u16) -> Pubkey {
     Pubkey::find_program_address(
-        &[education_regions::REGION_STATE_SEED, &region_id.to_le_bytes()],
+        &[
+            education_regions::REGION_STATE_SEED,
+            &region_id.to_le_bytes(),
+        ],
         &regions_id(),
     )
     .0
@@ -209,7 +243,11 @@ pub fn region_proposal_pda(proposal_id: u64) -> Pubkey {
 }
 pub fn region_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
-        &[education_regions::VOTE_SEED, &proposal_id.to_le_bytes(), voter.as_ref()],
+        &[
+            education_regions::VOTE_SEED,
+            &proposal_id.to_le_bytes(),
+            voter.as_ref(),
+        ],
         &regions_id(),
     )
     .0
@@ -219,7 +257,11 @@ pub fn proposal_pda(proposal_id: u64) -> Pubkey {
 }
 pub fn proposal_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
-        &[PROPOSAL_VOTE_SEED, &proposal_id.to_le_bytes(), voter.as_ref()],
+        &[
+            PROPOSAL_VOTE_SEED,
+            &proposal_id.to_le_bytes(),
+            voter.as_ref(),
+        ],
         &eid(),
     )
     .0
@@ -249,7 +291,9 @@ pub fn set_mint(svm: &mut LiteSVM, mint: Pubkey) {
 pub fn set_mint_dec(svm: &mut LiteSVM, mint: Pubkey, decimals: u8) {
     let m = SplMint {
         mint_authority: COption::None,
-        supply: 0,
+        // Only the XCAV supply is read (by the regions operator bond, 0.1% of
+        // supply); this value makes that bond 1e9. Harmless for the other mints.
+        supply: 1_000_000_000_000,
         decimals,
         is_initialized: true,
         freeze_authority: COption::None,
@@ -258,7 +302,13 @@ pub fn set_mint_dec(svm: &mut LiteSVM, mint: Pubkey, decimals: u8) {
     m.pack_into_slice(&mut data);
     svm.set_account(
         mint,
-        Account { lamports: 100_000_000, data, owner: TOKEN_PROGRAM_ID, executable: false, rent_epoch: 0 },
+        Account {
+            lamports: 100_000_000,
+            data,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
     )
     .unwrap();
 }
@@ -278,7 +328,13 @@ pub fn give(svm: &mut LiteSVM, mint: &Pubkey, owner: &Pubkey, amount: u64) {
     acc.pack_into_slice(&mut data);
     svm.set_account(
         token_acc(mint, owner),
-        Account { lamports: 100_000_000, data, owner: TOKEN_PROGRAM_ID, executable: false, rent_epoch: 0 },
+        Account {
+            lamports: 100_000_000,
+            data,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
     )
     .unwrap();
 }
@@ -309,7 +365,11 @@ pub fn process(
 
 pub fn ok(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keypair]) {
     if let Err(failed) = process(svm, ix, payer, signers) {
-        panic!("expected success, failed with: {:?}\n{}", failed.err, failed.meta.logs.join("\n"));
+        panic!(
+            "expected success, failed with: {:?}\n{}",
+            failed.err,
+            failed.meta.logs.join("\n")
+        );
     }
 }
 
@@ -319,7 +379,10 @@ pub fn err(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keyp
         Ok(_) => panic!("expected failure with {code}, but it succeeded"),
         Err(failed) => {
             let logs = failed.meta.logs.join("\n");
-            assert!(logs.contains(code), "expected error {code}, got logs:\n{logs}");
+            assert!(
+                logs.contains(code),
+                "expected error {code}, got logs:\n{logs}"
+            );
         }
     }
 }
@@ -329,7 +392,11 @@ pub fn send_cu(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&
     match process(svm, ix, payer, signers) {
         Ok(meta) => meta.compute_units_consumed,
         Err(failed) => {
-            panic!("expected success, failed with: {:?}\n{}", failed.err, failed.meta.logs.join("\n"))
+            panic!(
+                "expected success, failed with: {:?}\n{}",
+                failed.err,
+                failed.meta.logs.join("\n")
+            )
         }
     }
 }
@@ -422,6 +489,7 @@ pub fn default_params() -> ConfigParams {
         min_impact_score_bps: 5_000,
         sponsorship_window: 1_000,
         cancellation_window: 1_000,
+        no_show_grace: 1_000,
         max_cancellations: 3,
         max_strikes: 3,
         strike_slash_bps: 1_000,
@@ -461,7 +529,10 @@ pub fn bind_upgrade_authority(svm: &mut LiteSVM, program_id: &Pubkey, authority:
 pub fn edu_init_ix(authority: &Pubkey, protocol: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::InitializeConfig { params: default_params() }.data(),
+        &real_x_education::instruction::InitializeConfig {
+            params: default_params(),
+        }
+        .data(),
         real_x_education::accounts::InitializeConfig {
             authority: *authority,
             program: eid(),
@@ -481,8 +552,12 @@ pub fn edu_init_ix(authority: &Pubkey, protocol: &Pubkey) -> Instruction {
 pub fn create_module_ix(creator: &Pubkey, region: u16, module_id: u64, amount: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::CreateModule { region, module_amount: amount, metadata: "ipfs://m".to_string() }
-            .data(),
+        &real_x_education::instruction::CreateModule {
+            region,
+            module_amount: amount,
+            metadata: "ipfs://m".to_string(),
+        }
+        .data(),
         real_x_education::accounts::CreateModule {
             creator: *creator,
             config: config_pda(),
@@ -504,7 +579,11 @@ pub fn create_module_ix(creator: &Pubkey, region: u16, module_id: u64, amount: u
 pub fn sponsor_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64, amount: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::SponsorModule { module_id, token_amount: amount }.data(),
+        &real_x_education::instruction::SponsorModule {
+            module_id,
+            token_amount: amount,
+        }
+        .data(),
         real_x_education::accounts::SponsorModule {
             sponsor: *sponsor,
             config: config_pda(),
@@ -521,10 +600,36 @@ pub fn sponsor_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64, amount: u64
     )
 }
 
+/// Far-future delivery time for bookings that are never scored, so the
+/// delivery/score gate never blocks booking-mechanics tests.
+pub const NEVER_DELIVER: i64 = i64::MAX;
+
+/// The current on-chain timestamp; use as `delivery_at` when a test books and
+/// then scores at the same clock.
+pub fn now_ts(svm: &LiteSVM) -> i64 {
+    svm.get_sysvar::<Clock>().unix_timestamp
+}
+
 pub fn book_ix(school: &Pubkey, module_id: u64, sponsor_id: u64, booking_id: u64) -> Instruction {
+    book_ix_at(school, module_id, sponsor_id, booking_id, NEVER_DELIVER)
+}
+
+pub fn book_ix_at(
+    school: &Pubkey,
+    module_id: u64,
+    sponsor_id: u64,
+    booking_id: u64,
+    delivery_at: i64,
+) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::BookModule { module_id, sponsor_id, metadata: "ipfs://b".to_string() }.data(),
+        &real_x_education::instruction::BookModule {
+            module_id,
+            sponsor_id,
+            delivery_at,
+            metadata: "ipfs://b".to_string(),
+        }
+        .data(),
         real_x_education::accounts::BookModule {
             school: *school,
             config: config_pda(),
@@ -567,7 +672,11 @@ pub fn register_deliverer_ix(lecturer: &Pubkey) -> Instruction {
 pub fn claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::ClaimBooking { module_id, booking_id }.data(),
+        &real_x_education::instruction::ClaimBooking {
+            module_id,
+            booking_id,
+        }
+        .data(),
         real_x_education::accounts::ClaimBooking {
             lecturer: *lecturer,
             config: config_pda(),
@@ -583,12 +692,46 @@ pub fn claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> Instructi
 pub fn cancel_claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::CancelClaim { module_id, booking_id }.data(),
+        &real_x_education::instruction::CancelClaim {
+            module_id,
+            booking_id,
+        }
+        .data(),
         real_x_education::accounts::CancelClaim {
             lecturer: *lecturer,
             config: config_pda(),
             module: module_pda(module_id),
             lecturer_role: role_pda(lecturer, Role::ModuleDeliverer),
+            deliverer: deliverer_pda(lecturer),
+            booking: booking_pda(module_id, booking_id),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            treasury: treasury_pda(),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Permissionless no-show expiry. `lecturer` is the claimant being struck.
+pub fn expire_claim_ix(
+    cranker: &Pubkey,
+    lecturer: &Pubkey,
+    module_id: u64,
+    booking_id: u64,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ExpireClaim {
+            module_id,
+            booking_id,
+        }
+        .data(),
+        real_x_education::accounts::ExpireClaim {
+            cranker: *cranker,
+            config: config_pda(),
+            module: module_pda(module_id),
+            lecturer: *lecturer,
             deliverer: deliverer_pda(lecturer),
             booking: booking_pda(module_id, booking_id),
             xcav_mint: xcav_mint(),
@@ -615,7 +758,12 @@ pub fn submit_score_ix(
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::SubmitImpactScore { module_id, booking_id, score }.data(),
+        &real_x_education::instruction::SubmitImpactScore {
+            module_id,
+            booking_id,
+            score,
+        }
+        .data(),
         real_x_education::accounts::SubmitImpactScore {
             agent: *agent,
             config: config_pda(),
@@ -642,10 +790,13 @@ pub fn submit_score_ix(
 pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::FinishBookingProcess { module_id, booking_id }.data(),
+        &real_x_education::instruction::FinishBookingProcess {
+            module_id,
+            booking_id,
+        }
+        .data(),
         real_x_education::accounts::FinishBooking {
             school: *school,
-            school_role: role_pda(school, Role::ModuleBooker),
             config: config_pda(),
             xcav_mint: xcav_mint(),
             vault: vault(),
@@ -659,15 +810,24 @@ pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instructio
     )
 }
 
-pub fn reclaim_sponsorship_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64, amount: u64) -> Instruction {
+pub fn reclaim_sponsorship_ix(
+    sponsor: &Pubkey,
+    module_id: u64,
+    sponsor_id: u64,
+    amount: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::ReclaimSponsorship { module_id, sponsor_id, amount }.data(),
+        &real_x_education::instruction::ReclaimSponsorship {
+            module_id,
+            sponsor_id,
+            amount,
+        }
+        .data(),
         real_x_education::accounts::ReclaimSponsorship {
             sponsor: *sponsor,
             config: config_pda(),
             module: module_pda(module_id),
-            sponsor_role: role_pda(sponsor, Role::ModuleSponsor),
             sponsorship: sponsorship_pda(module_id, sponsor_id),
             payment_mint: usdc_mint(),
             sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
@@ -681,7 +841,11 @@ pub fn reclaim_sponsorship_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64,
 pub fn close_sponsorship_ix(sponsor: &Pubkey, module_id: u64, sponsor_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::CloseSponsorship { module_id, sponsor_id }.data(),
+        &real_x_education::instruction::CloseSponsorship {
+            module_id,
+            sponsor_id,
+        }
+        .data(),
         real_x_education::accounts::CloseSponsorship {
             sponsor: *sponsor,
             config: config_pda(),
@@ -729,7 +893,12 @@ pub fn create_proposal_ix(
 pub fn vote_ix(voter: &Pubkey, proposal_id: u64, vote: ModuleVote, amount: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::VoteOnProposal { proposal_id, vote, amount }.data(),
+        &real_x_education::instruction::VoteOnProposal {
+            proposal_id,
+            vote,
+            amount,
+        }
+        .data(),
         real_x_education::accounts::VoteOnProposal {
             voter: *voter,
             config: config_pda(),
@@ -785,7 +954,11 @@ pub fn claim_proposal_ix(creator: &Pubkey, proposal_id: u64) -> Instruction {
 pub fn upload_proposal_ix(claimant: &Pubkey, proposal_id: u64) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::UploadProposal { proposal_id, content_uri: "ipfs://c".to_string() }.data(),
+        &real_x_education::instruction::UploadProposal {
+            proposal_id,
+            content_uri: "ipfs://c".to_string(),
+        }
+        .data(),
         real_x_education::accounts::UploadProposal {
             claimant: *claimant,
             proposal: proposal_pda(proposal_id),
@@ -814,7 +987,11 @@ pub fn release_claim_ix(cranker: &Pubkey, proposal_id: u64) -> Instruction {
 pub fn review_proposal_ix(agent: &Pubkey, proposal_id: u64, passed: bool) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::ReviewProposal { proposal_id, passed }.data(),
+        &real_x_education::instruction::ReviewProposal {
+            proposal_id,
+            passed,
+        }
+        .data(),
         real_x_education::accounts::ReviewProposal {
             agent: *agent,
             config: config_pda(),
@@ -849,7 +1026,12 @@ pub fn mint_proposed_ix(creator: &Pubkey, proposal_id: u64, module_id: u64) -> I
     )
 }
 
-pub fn create_sponsor_proposal_ix(proposer: &Pubkey, region: u16, proposal_id: u64, amount: u64) -> Instruction {
+pub fn create_sponsor_proposal_ix(
+    proposer: &Pubkey,
+    region: u16,
+    proposal_id: u64,
+    amount: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::CreateSponsorProposal {
@@ -936,6 +1118,31 @@ pub fn expire_proposal_ix(cranker: &Pubkey, proposal_id: u64) -> Instruction {
             vault: vault(),
             treasury: treasury_pda(),
             proposal: proposal_pda(proposal_id),
+            claimant_xcav: None,
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// `expire_proposal` supplying the claimant's XCAV account, so an `UnderReview`
+/// proposal's bond is refunded to them rather than slashed.
+pub fn expire_proposal_refund_ix(
+    cranker: &Pubkey,
+    proposal_id: u64,
+    claimant: &Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ExpireProposal { proposal_id }.data(),
+        real_x_education::accounts::ExpireProposal {
+            cranker: *cranker,
+            config: config_pda(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            treasury: treasury_pda(),
+            proposal: proposal_pda(proposal_id),
+            claimant_xcav: Some(token_acc(&xcav_mint(), claimant)),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -984,11 +1191,8 @@ pub struct World {
 
 pub fn regions_default_params() -> education_regions::instructions::ConfigParams {
     education_regions::instructions::ConfigParams {
-        proposal_deposit: 1_000_000_000,
         minimum_voting_amount: 100_000_000,
-        minimum_region_deposit: 500_000_000,
         voting_period: 1_000,
-        auction_period: 1_000,
         owner_change_period: 10_000,
         threshold_bps: 5_000,
         quorum: 100_000_000,
@@ -1003,7 +1207,10 @@ pub fn regions_default_params() -> education_regions::instructions::ConfigParams
 pub fn regions_init_ix(authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         regions_id(),
-        &education_regions::instruction::InitializeConfig { params: regions_default_params() }.data(),
+        &education_regions::instruction::InitializeConfig {
+            params: regions_default_params(),
+        }
+        .data(),
         education_regions::accounts::InitializeConfig {
             authority: *authority,
             program: regions_id(),
@@ -1040,7 +1247,12 @@ pub fn region_propose_ix(proposer: &Pubkey, region_id: u16, proposal_id: u64) ->
     )
 }
 
-pub fn region_vote_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, amount: u64) -> Instruction {
+pub fn region_vote_ix(
+    voter: &Pubkey,
+    region_id: u16,
+    proposal_id: u64,
+    amount: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         regions_id(),
         &education_regions::instruction::VoteOnRegionProposal {
@@ -1065,7 +1277,12 @@ pub fn region_vote_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, amount: 
     )
 }
 
-pub fn region_finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey) -> Instruction {
+pub fn region_finalize_ix(
+    cranker: &Pubkey,
+    region_id: u16,
+    proposal_id: u64,
+    proposer: &Pubkey,
+) -> Instruction {
     Instruction::new_with_bytes(
         regions_id(),
         &education_regions::instruction::FinalizeRegionProposal { region_id }.data(),
@@ -1078,26 +1295,6 @@ pub fn region_finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, pr
             proposal: region_proposal_pda(proposal_id),
             proposer: *proposer,
             proposer_token: Some(token_acc(&xcav_mint(), proposer)),
-            treasury: treasury_pda(),
-            token_program: TOKEN_PROGRAM_ID,
-        }
-        .to_account_metas(None),
-    )
-}
-
-pub fn region_bid_ix(bidder: &Pubkey, region_id: u16, amount: u64) -> Instruction {
-    Instruction::new_with_bytes(
-        regions_id(),
-        &education_regions::instruction::BidOnRegion { region_id, amount }.data(),
-        education_regions::accounts::BidOnRegion {
-            bidder: *bidder,
-            config: regions_config(),
-            operator_role: role_pda(bidder, Role::RegionalOperator),
-            xcav_mint: xcav_mint(),
-            bidder_token: token_acc(&xcav_mint(), bidder),
-            vault: regions_vault(),
-            region_state: region_state_pda(region_id),
-            previous_bidder_token: None,
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -1107,25 +1304,17 @@ pub fn region_bid_ix(bidder: &Pubkey, region_id: u16, amount: u64) -> Instructio
 pub fn region_create_ix(creator: &Pubkey, region_id: u16) -> Instruction {
     Instruction::new_with_bytes(
         regions_id(),
-        &education_regions::instruction::CreateNewRegion { region_id }.data(),
-        education_regions::accounts::CreateNewRegion {
+        &education_regions::instruction::CreateRegion { region_id }.data(),
+        education_regions::accounts::CreateRegion {
             creator: *creator,
-            creator_role: role_pda(creator, Role::RegionalOperator),
             config: regions_config(),
+            creator_role: role_pda(creator, Role::RegionalOperator),
             region_state: region_state_pda(region_id),
             region: region_pda(region_id),
             system_program: SYS,
         }
         .to_account_metas(None),
     )
-}
-
-pub fn replacement_auction_pda(region_id: u16) -> Pubkey {
-    Pubkey::find_program_address(
-        &[education_regions::REPLACEMENT_AUCTION_SEED, &region_id.to_le_bytes()],
-        &regions_id(),
-    )
-    .0
 }
 
 /// Schedule the current operator's departure, opening the seat after the notice period.
@@ -1143,46 +1332,25 @@ pub fn resign_ix(operator: &Pubkey, region_id: u16) -> Instruction {
     )
 }
 
-/// Bid to take over an open region seat; `previous` refunds the outbid leader.
-pub fn bid_replacement_ix(
-    bidder: &Pubkey,
+/// Claim an existing region whose seat is open, bonding 0.1% of XCAV supply and
+/// refunding the outgoing operator's collateral.
+pub fn region_claim_open_ix(
+    new_operator: &Pubkey,
     region_id: u16,
-    amount: u64,
-    previous: Option<Pubkey>,
+    old_owner: &Pubkey,
 ) -> Instruction {
     Instruction::new_with_bytes(
         regions_id(),
-        &education_regions::instruction::BidOnReplacement { region_id, amount }.data(),
-        education_regions::accounts::BidOnReplacement {
-            bidder: *bidder,
+        &education_regions::instruction::ClaimOpenRegion { region_id }.data(),
+        education_regions::accounts::ClaimOpenRegion {
+            new_operator: *new_operator,
             config: regions_config(),
-            operator_role: role_pda(bidder, Role::RegionalOperator),
+            operator_role: role_pda(new_operator, Role::RegionalOperator),
             xcav_mint: xcav_mint(),
-            bidder_token: token_acc(&xcav_mint(), bidder),
+            new_operator_token: token_acc(&xcav_mint(), new_operator),
             vault: regions_vault(),
             region: region_pda(region_id),
-            auction: replacement_auction_pda(region_id),
-            previous_bidder_token: previous.as_ref().map(|p| token_acc(&xcav_mint(), p)),
-            token_program: TOKEN_PROGRAM_ID,
-            system_program: SYS,
-        }
-        .to_account_metas(None),
-    )
-}
-
-/// Finalize a replacement auction, installing the winner and refunding the old owner's collateral.
-pub fn finalize_replacement_ix(cranker: &Pubkey, region_id: u16, old_owner: &Pubkey) -> Instruction {
-    Instruction::new_with_bytes(
-        regions_id(),
-        &education_regions::instruction::FinalizeReplacement { region_id }.data(),
-        education_regions::accounts::FinalizeReplacement {
-            cranker: *cranker,
-            config: regions_config(),
-            xcav_mint: xcav_mint(),
-            vault: regions_vault(),
-            region: region_pda(region_id),
-            auction: replacement_auction_pda(region_id),
-            old_owner_token: Some(token_acc(&xcav_mint(), old_owner)),
+            old_owner_token: token_acc(&xcav_mint(), old_owner),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -1190,25 +1358,54 @@ pub fn finalize_replacement_ix(cranker: &Pubkey, region_id: u16, old_owner: &Pub
 }
 
 /// Drive the regions governance flow end to end so `region_id` is created by
-/// the regions program (not seeded), owned by `operator`: propose, pass the
-/// vote, finalize into an auction, win it, and create the region.
+/// the regions program (not seeded), owned by `operator`: propose (bonding),
+/// pass the vote, finalize, and claim the passed region.
 pub fn govern_region(w: &mut World, operator: &Keypair, region_id: u16) {
     let admin = w.admin.insecure_clone();
-    ok(&mut w.svm, roles_assign_ix(&admin.pubkey(), &operator.pubkey(), Role::RegionalOperator), &admin, &[&admin]);
+    ok(
+        &mut w.svm,
+        roles_assign_ix(&admin.pubkey(), &operator.pubkey(), Role::RegionalOperator),
+        &admin,
+        &[&admin],
+    );
 
     let proposal_id = regions_proposal_counter(&w.svm);
-    ok(&mut w.svm, region_propose_ix(&operator.pubkey(), region_id, proposal_id), operator, &[operator]);
+    ok(
+        &mut w.svm,
+        region_propose_ix(&operator.pubkey(), region_id, proposal_id),
+        operator,
+        &[operator],
+    );
 
     let voter = actor(&mut w.svm);
-    ok(&mut w.svm, region_vote_ix(&voter.pubkey(), region_id, proposal_id, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut w.svm,
+        region_vote_ix(&voter.pubkey(), region_id, proposal_id, 200_000_000),
+        &voter,
+        &[&voter],
+    );
 
     warp(&mut w.svm, 2_000); // past the voting window
     let cranker = funded(&mut w.svm);
-    ok(&mut w.svm, region_finalize_ix(&cranker.pubkey(), region_id, proposal_id, &operator.pubkey()), &cranker, &[&cranker]);
+    ok(
+        &mut w.svm,
+        region_finalize_ix(
+            &cranker.pubkey(),
+            region_id,
+            proposal_id,
+            &operator.pubkey(),
+        ),
+        &cranker,
+        &[&cranker],
+    );
 
-    ok(&mut w.svm, region_bid_ix(&operator.pubkey(), region_id, 600_000_000), operator, &[operator]);
-    warp(&mut w.svm, 2_000); // past the auction window
-    ok(&mut w.svm, region_create_ix(&operator.pubkey(), region_id), operator, &[operator]);
+    // The proposer claims the passed region, becoming its operator.
+    ok(
+        &mut w.svm,
+        region_create_ix(&operator.pubkey(), region_id),
+        operator,
+        &[operator],
+    );
 }
 
 pub fn regions_proposal_counter(svm: &LiteSVM) -> u64 {
@@ -1222,9 +1419,21 @@ pub fn regions_proposal_counter(svm: &LiteSVM) -> u64 {
 /// flow to create one. The returned `operator` holds no role yet.
 pub fn setup_governed() -> World {
     let mut svm = LiteSVM::new();
-    svm.add_program(roles_id(), include_bytes!("../../../../target/deploy/xcavate_roles.so")).unwrap();
-    svm.add_program(regions_id(), include_bytes!("../../../../target/deploy/education_regions.so")).unwrap();
-    svm.add_program(eid(), include_bytes!("../../../../target/deploy/real_x_education.so")).unwrap();
+    svm.add_program(
+        roles_id(),
+        include_bytes!("../../../../target/deploy/xcavate_roles.so"),
+    )
+    .unwrap();
+    svm.add_program(
+        regions_id(),
+        include_bytes!("../../../../target/deploy/education_regions.so"),
+    )
+    .unwrap();
+    svm.add_program(
+        eid(),
+        include_bytes!("../../../../target/deploy/real_x_education.so"),
+    )
+    .unwrap();
     set_mint(&mut svm, xcav_mint());
     set_mint(&mut svm, usdc_mint());
     set_mint_dec(&mut svm, gbp_mint(), GBP_DECIMALS);
@@ -1233,28 +1442,66 @@ pub fn setup_governed() -> World {
     bind_upgrade_authority(&mut svm, &roles_id(), &authority.pubkey());
     bind_upgrade_authority(&mut svm, &regions_id(), &authority.pubkey());
     bind_upgrade_authority(&mut svm, &eid(), &authority.pubkey());
-    ok(&mut svm, roles_init_ix(&authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        roles_init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     let admin = funded(&mut svm);
-    ok(&mut svm, roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     // Regions init creates the shared treasury and the regions vault for real.
-    ok(&mut svm, regions_init_ix(&authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        regions_init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     let operator = actor(&mut svm);
     let protocol = actor(&mut svm);
-    ok(&mut svm, edu_init_ix(&authority.pubkey(), &protocol.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        edu_init_ix(&authority.pubkey(), &protocol.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
-    World { svm, admin, authority, protocol, operator }
+    World {
+        svm,
+        admin,
+        authority,
+        protocol,
+        operator,
+    }
 }
 
 /// Loads the three programs, seeds mints, a created region, and the education
 /// config. The region operator is seeded directly into a `Region` account.
 pub fn setup() -> World {
     let mut svm = LiteSVM::new();
-    svm.add_program(roles_id(), include_bytes!("../../../../target/deploy/xcavate_roles.so")).unwrap();
-    svm.add_program(regions_id(), include_bytes!("../../../../target/deploy/education_regions.so")).unwrap();
-    svm.add_program(eid(), include_bytes!("../../../../target/deploy/real_x_education.so")).unwrap();
+    svm.add_program(
+        roles_id(),
+        include_bytes!("../../../../target/deploy/xcavate_roles.so"),
+    )
+    .unwrap();
+    svm.add_program(
+        regions_id(),
+        include_bytes!("../../../../target/deploy/education_regions.so"),
+    )
+    .unwrap();
+    svm.add_program(
+        eid(),
+        include_bytes!("../../../../target/deploy/real_x_education.so"),
+    )
+    .unwrap();
     set_mint(&mut svm, xcav_mint());
     set_mint(&mut svm, usdc_mint());
     set_mint_dec(&mut svm, gbp_mint(), GBP_DECIMALS);
@@ -1265,10 +1512,20 @@ pub fn setup() -> World {
     // The shared protocol treasury lives at the regions program's treasury
     // PDA; seed an empty XCAV account there.
     set_treasury(&mut svm);
-    ok(&mut svm, roles_init_ix(&authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        roles_init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     let admin = funded(&mut svm);
-    ok(&mut svm, roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     // Region operator: seed a created Region directly + give them a USDC account.
     let operator = actor(&mut svm);
@@ -1276,25 +1533,54 @@ pub fn setup() -> World {
         &[education_regions::REGION_SEED, &1u16.to_le_bytes()],
         &regions_id(),
     );
-    let region = Region { region_id: 1, owner: operator.pubkey(), collateral: 0, active_strikes: 0, next_owner_change: 0, bump };
+    let region = Region {
+        region_id: 1,
+        owner: operator.pubkey(),
+        collateral: 0,
+        active_strikes: 0,
+        next_owner_change: 0,
+        bump,
+    };
     let mut data = Vec::new();
     region.try_serialize(&mut data).unwrap();
     svm.set_account(
         region_addr,
-        Account { lamports: 10_000_000, data, owner: regions_id(), executable: false, rent_epoch: 0 },
+        Account {
+            lamports: 10_000_000,
+            data,
+            owner: regions_id(),
+            executable: false,
+            rent_epoch: 0,
+        },
     )
     .unwrap();
 
     let protocol = actor(&mut svm);
-    ok(&mut svm, edu_init_ix(&authority.pubkey(), &protocol.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        edu_init_ix(&authority.pubkey(), &protocol.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
-    World { svm, admin, authority, protocol, operator }
+    World {
+        svm,
+        admin,
+        authority,
+        protocol,
+        operator,
+    }
 }
 
 pub fn with_role(w: &mut World, role: Role) -> Keypair {
     let kp = actor(&mut w.svm);
     let admin = w.admin.insecure_clone();
-    ok(&mut w.svm, roles_assign_ix(&admin.pubkey(), &kp.pubkey(), role), &admin, &[&admin]);
+    ok(
+        &mut w.svm,
+        roles_assign_ix(&admin.pubkey(), &kp.pubkey(), role),
+        &admin,
+        &[&admin],
+    );
     kp
 }
 
@@ -1305,20 +1591,28 @@ pub fn module_of(svm: &LiteSVM, id: u64) -> Module {
     Module::try_deserialize(&mut &svm.get_account(&module_pda(id)).unwrap().data[..]).unwrap()
 }
 pub fn deliverer_of(svm: &LiteSVM, who: &Pubkey) -> Deliverer {
-    Deliverer::try_deserialize(&mut &svm.get_account(&deliverer_pda(who)).unwrap().data[..]).unwrap()
+    Deliverer::try_deserialize(&mut &svm.get_account(&deliverer_pda(who)).unwrap().data[..])
+        .unwrap()
 }
 pub fn proposal_of(svm: &LiteSVM, id: u64) -> ModuleProposal {
-    ModuleProposal::try_deserialize(&mut &svm.get_account(&proposal_pda(id)).unwrap().data[..]).unwrap()
+    ModuleProposal::try_deserialize(&mut &svm.get_account(&proposal_pda(id)).unwrap().data[..])
+        .unwrap()
 }
 pub fn booking_of(svm: &LiteSVM, module_id: u64, booking_id: u64) -> Booking {
     Booking::try_deserialize(
-        &mut &svm.get_account(&booking_pda(module_id, booking_id)).unwrap().data[..],
+        &mut &svm
+            .get_account(&booking_pda(module_id, booking_id))
+            .unwrap()
+            .data[..],
     )
     .unwrap()
 }
 pub fn sponsorship_of(svm: &LiteSVM, module_id: u64, sponsor_id: u64) -> Sponsorship {
     Sponsorship::try_deserialize(
-        &mut &svm.get_account(&sponsorship_pda(module_id, sponsor_id)).unwrap().data[..],
+        &mut &svm
+            .get_account(&sponsorship_pda(module_id, sponsor_id))
+            .unwrap()
+            .data[..],
     )
     .unwrap()
 }
@@ -1329,17 +1623,26 @@ pub fn credential_of(
     recipient: &Pubkey,
 ) -> Credential {
     Credential::try_deserialize(
-        &mut &svm.get_account(&credential_pda(booking_id, kind, recipient)).unwrap().data[..],
+        &mut &svm
+            .get_account(&credential_pda(booking_id, kind, recipient))
+            .unwrap()
+            .data[..],
     )
     .unwrap()
 }
 /// Whether an account has been closed (gone, or zero-length data).
 pub fn closed(svm: &LiteSVM, addr: &Pubkey) -> bool {
-    svm.get_account(addr).map(|a| a.data.is_empty()).unwrap_or(true)
+    svm.get_account(addr)
+        .map(|a| a.data.is_empty())
+        .unwrap_or(true)
 }
 
 // --- extra ix builders ---
-pub fn update_config_ix(authority: &Pubkey, protocol: &Pubkey, params: ConfigParams) -> Instruction {
+pub fn update_config_ix(
+    authority: &Pubkey,
+    protocol: &Pubkey,
+    params: ConfigParams,
+) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::UpdateConfig { params }.data(),
@@ -1357,9 +1660,15 @@ pub fn update_config_ix(authority: &Pubkey, protocol: &Pubkey, params: ConfigPar
 pub fn update_authority_ix(authority: &Pubkey, new_authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::UpdateAuthority { new_authority: *new_authority }.data(),
-        real_x_education::accounts::UpdateAuthority { authority: *authority, config: config_pda() }
-            .to_account_metas(None),
+        &real_x_education::instruction::UpdateAuthority {
+            new_authority: *new_authority,
+        }
+        .data(),
+        real_x_education::accounts::UpdateAuthority {
+            authority: *authority,
+            config: config_pda(),
+        }
+        .to_account_metas(None),
     )
 }
 
@@ -1409,12 +1718,15 @@ pub fn cancel_booking_ix(
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::CancelBooking { module_id, booking_id }.data(),
+        &real_x_education::instruction::CancelBooking {
+            module_id,
+            booking_id,
+        }
+        .data(),
         real_x_education::accounts::CancelBooking {
             school: *school,
             config: config_pda(),
             module: module_pda(module_id),
-            school_role: role_pda(school, Role::ModuleBooker),
             booking: booking_pda(module_id, booking_id),
             xcav_mint: xcav_mint(),
             vault: vault(),
@@ -1441,7 +1753,6 @@ pub fn clear_old_cancellation_ix(school: &Pubkey, booking_id: u64) -> Instructio
         real_x_education::accounts::ClearOldCancellation {
             school: *school,
             config: config_pda(),
-            school_role: role_pda(school, Role::ModuleBooker),
             counter: counter_pda(school),
             cancellation: cancellation_pda(school, booking_id),
         }
@@ -1526,7 +1837,11 @@ pub fn sponsor_asset_ix(
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::SponsorModule { module_id, token_amount: amount }.data(),
+        &real_x_education::instruction::SponsorModule {
+            module_id,
+            token_amount: amount,
+        }
+        .data(),
         real_x_education::accounts::SponsorModule {
             sponsor: *sponsor,
             config: config_pda(),
@@ -1549,11 +1864,18 @@ pub fn book_asset_ix(
     module_id: u64,
     sponsor_id: u64,
     booking_id: u64,
+    delivery_at: i64,
     mint: &Pubkey,
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::BookModule { module_id, sponsor_id, metadata: "ipfs://b".to_string() }.data(),
+        &real_x_education::instruction::BookModule {
+            module_id,
+            sponsor_id,
+            delivery_at,
+            metadata: "ipfs://b".to_string(),
+        }
+        .data(),
         real_x_education::accounts::BookModule {
             school: *school,
             config: config_pda(),
@@ -1591,7 +1913,12 @@ pub fn submit_score_asset_ix(
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::SubmitImpactScore { module_id, booking_id, score }.data(),
+        &real_x_education::instruction::SubmitImpactScore {
+            module_id,
+            booking_id,
+            score,
+        }
+        .data(),
         real_x_education::accounts::SubmitImpactScore {
             agent: *agent,
             config: config_pda(),
@@ -1614,4 +1941,3 @@ pub fn submit_score_asset_ix(
         .to_account_metas(None),
     )
 }
-

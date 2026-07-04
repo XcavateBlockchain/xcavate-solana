@@ -21,7 +21,7 @@ pub const REGION_STATE_SEED: &[u8] = b"region_state";
 pub const VOTE_SEED: &[u8] = b"vote";
 
 /// PDA seed for the protocol's XCAV escrow vault (holds all staked governance
-/// tokens: proposal deposits, vote locks, and auction bids).
+/// tokens: proposal bonds, vote locks, and region collateral).
 #[constant]
 pub const VAULT_SEED: &[u8] = b"vault";
 
@@ -32,10 +32,6 @@ pub const REMOVAL_PROPOSAL_SEED: &[u8] = b"removal_proposal";
 /// PDA seed for a single voter's vote on a removal proposal.
 #[constant]
 pub const REMOVAL_VOTE_SEED: &[u8] = b"removal_vote";
-
-/// PDA seed for a region's replacement auction (one per region).
-#[constant]
-pub const REPLACEMENT_AUCTION_SEED: &[u8] = b"replacement_auction";
 
 /// The protocol treasury token account (program owned, shared with real-x).
 #[constant]

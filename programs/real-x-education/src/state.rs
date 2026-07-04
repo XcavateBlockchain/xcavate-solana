@@ -46,6 +46,9 @@ pub struct Config {
     pub sponsorship_window: i64,
     /// Window (seconds) over which a school's cancellations are counted.
     pub cancellation_window: i64,
+    /// Grace period (seconds) after a booking's scheduled delivery before a
+    /// no-show claim can be expired (striking the absent lecturer).
+    pub no_show_grace: i64,
 
     /// School cancellations within the window before its deposit is slashed.
     pub max_cancellations: u32,
@@ -180,6 +183,10 @@ pub struct Booking {
     /// XCAV deposit held from the school.
     pub deposit: u64,
     pub booked_at: i64,
+    /// When the session is scheduled to be delivered. Set by the school at
+    /// booking time; a score can't be submitted before it, and a no-show claim
+    /// can be expired once it plus the grace period has passed.
+    pub delivery_at: i64,
     pub claimed_at: Option<i64>,
     #[max_len(200)]
     pub metadata: String,

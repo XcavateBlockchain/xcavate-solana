@@ -36,11 +36,39 @@ fn usdc_partial_score_split_exact() {
     let operator = w.operator.pubkey();
     let protocol = w.protocol.pubkey();
 
-    ok(&mut w.svm, create_module_ix(&c.creator.pubkey(), 1, 0, 10), &c.creator, &[&c.creator]);
-    ok(&mut w.svm, sponsor_ix(&c.sponsor.pubkey(), 0, 0, 5), &c.sponsor, &[&c.sponsor]);
-    ok(&mut w.svm, book_ix(&c.school.pubkey(), 0, 0, 0), &c.school, &[&c.school]);
-    ok(&mut w.svm, register_deliverer_ix(&c.lecturer.pubkey()), &c.lecturer, &[&c.lecturer]);
-    ok(&mut w.svm, claim_ix(&c.lecturer.pubkey(), 0, 0), &c.lecturer, &[&c.lecturer]);
+    ok(
+        &mut w.svm,
+        create_module_ix(&c.creator.pubkey(), 1, 0, 10),
+        &c.creator,
+        &[&c.creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&c.sponsor.pubkey(), 0, 0, 5),
+        &c.sponsor,
+        &[&c.sponsor],
+    );
+    {
+        let d = now_ts(&w.svm);
+        ok(
+            &mut w.svm,
+            book_ix_at(&c.school.pubkey(), 0, 0, 0, d),
+            &c.school,
+            &[&c.school],
+        );
+    }
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&c.lecturer.pubkey()),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&c.lecturer.pubkey(), 0, 0),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
 
     let cre_before = balance(&w.svm, &usdc_mint(), &c.creator.pubkey());
     let op_before = balance(&w.svm, &usdc_mint(), &operator);
@@ -51,7 +79,18 @@ fn usdc_partial_score_split_exact() {
     // 75% score, above the 50% threshold. base 100e6, fees 8.3/8.3/5/3.4e6.
     ok(
         &mut w.svm,
-        submit_score_ix(&c.agent.pubkey(), 0, 0, 7_500, 1, &c.creator.pubkey(), &operator, &protocol, &c.lecturer.pubkey(), &c.sponsor.pubkey()),
+        submit_score_ix(
+            &c.agent.pubkey(),
+            0,
+            0,
+            7_500,
+            1,
+            &c.creator.pubkey(),
+            &operator,
+            &protocol,
+            &c.lecturer.pubkey(),
+            &c.sponsor.pubkey(),
+        ),
         &c.agent,
         &[&c.agent],
     );
@@ -68,7 +107,7 @@ fn usdc_partial_score_split_exact() {
     assert_eq!(proto, 3_750_000); // 5e6 * 0.75
     assert_eq!(lec, 77_550_000); // 75e6 + 2.55e6
     assert_eq!(refund, 31_250_000); // remainder
-    // Conservation: the whole escrow is accounted for, nothing left behind.
+                                    // Conservation: the whole escrow is accounted for, nothing left behind.
     assert_eq!(cc + ro + proto + lec + refund, PER_TOKEN);
     assert_eq!(spl_amount(&w.svm, &book_escrow_pda(0, 0)), 0);
 }
@@ -80,11 +119,39 @@ fn score_at_threshold_boundary_pays() {
     let operator = w.operator.pubkey();
     let protocol = w.protocol.pubkey();
 
-    ok(&mut w.svm, create_module_ix(&c.creator.pubkey(), 1, 0, 10), &c.creator, &[&c.creator]);
-    ok(&mut w.svm, sponsor_ix(&c.sponsor.pubkey(), 0, 0, 5), &c.sponsor, &[&c.sponsor]);
-    ok(&mut w.svm, book_ix(&c.school.pubkey(), 0, 0, 0), &c.school, &[&c.school]);
-    ok(&mut w.svm, register_deliverer_ix(&c.lecturer.pubkey()), &c.lecturer, &[&c.lecturer]);
-    ok(&mut w.svm, claim_ix(&c.lecturer.pubkey(), 0, 0), &c.lecturer, &[&c.lecturer]);
+    ok(
+        &mut w.svm,
+        create_module_ix(&c.creator.pubkey(), 1, 0, 10),
+        &c.creator,
+        &[&c.creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&c.sponsor.pubkey(), 0, 0, 5),
+        &c.sponsor,
+        &[&c.sponsor],
+    );
+    {
+        let d = now_ts(&w.svm);
+        ok(
+            &mut w.svm,
+            book_ix_at(&c.school.pubkey(), 0, 0, 0, d),
+            &c.school,
+            &[&c.school],
+        );
+    }
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&c.lecturer.pubkey()),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&c.lecturer.pubkey(), 0, 0),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
 
     let cre_before = balance(&w.svm, &usdc_mint(), &c.creator.pubkey());
     let lec_before = balance(&w.svm, &usdc_mint(), &c.lecturer.pubkey());
@@ -93,7 +160,18 @@ fn score_at_threshold_boundary_pays() {
     // Exactly at the 50% threshold: the branch is `>=`, so it pays out.
     ok(
         &mut w.svm,
-        submit_score_ix(&c.agent.pubkey(), 0, 0, 5_000, 1, &c.creator.pubkey(), &operator, &protocol, &c.lecturer.pubkey(), &c.sponsor.pubkey()),
+        submit_score_ix(
+            &c.agent.pubkey(),
+            0,
+            0,
+            5_000,
+            1,
+            &c.creator.pubkey(),
+            &operator,
+            &protocol,
+            &c.lecturer.pubkey(),
+            &c.sponsor.pubkey(),
+        ),
         &c.agent,
         &[&c.agent],
     );
@@ -116,11 +194,39 @@ fn score_zero_refunds_full_no_strike() {
     let operator = w.operator.pubkey();
     let protocol = w.protocol.pubkey();
 
-    ok(&mut w.svm, create_module_ix(&c.creator.pubkey(), 1, 0, 10), &c.creator, &[&c.creator]);
-    ok(&mut w.svm, sponsor_ix(&c.sponsor.pubkey(), 0, 0, 5), &c.sponsor, &[&c.sponsor]);
-    ok(&mut w.svm, book_ix(&c.school.pubkey(), 0, 0, 0), &c.school, &[&c.school]);
-    ok(&mut w.svm, register_deliverer_ix(&c.lecturer.pubkey()), &c.lecturer, &[&c.lecturer]);
-    ok(&mut w.svm, claim_ix(&c.lecturer.pubkey(), 0, 0), &c.lecturer, &[&c.lecturer]);
+    ok(
+        &mut w.svm,
+        create_module_ix(&c.creator.pubkey(), 1, 0, 10),
+        &c.creator,
+        &[&c.creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&c.sponsor.pubkey(), 0, 0, 5),
+        &c.sponsor,
+        &[&c.sponsor],
+    );
+    {
+        let d = now_ts(&w.svm);
+        ok(
+            &mut w.svm,
+            book_ix_at(&c.school.pubkey(), 0, 0, 0, d),
+            &c.school,
+            &[&c.school],
+        );
+    }
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&c.lecturer.pubkey()),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&c.lecturer.pubkey(), 0, 0),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
 
     let cre_before = balance(&w.svm, &usdc_mint(), &c.creator.pubkey());
     let spon_before = balance(&w.svm, &usdc_mint(), &c.sponsor.pubkey());
@@ -129,13 +235,30 @@ fn score_zero_refunds_full_no_strike() {
     // full, the token is burned, and no strike is recorded.
     ok(
         &mut w.svm,
-        submit_score_ix(&c.agent.pubkey(), 0, 0, 0, 1, &c.creator.pubkey(), &operator, &protocol, &c.lecturer.pubkey(), &c.sponsor.pubkey()),
+        submit_score_ix(
+            &c.agent.pubkey(),
+            0,
+            0,
+            0,
+            1,
+            &c.creator.pubkey(),
+            &operator,
+            &protocol,
+            &c.lecturer.pubkey(),
+            &c.sponsor.pubkey(),
+        ),
         &c.agent,
         &[&c.agent],
     );
 
-    assert_eq!(balance(&w.svm, &usdc_mint(), &c.creator.pubkey()), cre_before);
-    assert_eq!(balance(&w.svm, &usdc_mint(), &c.sponsor.pubkey()) - spon_before, PER_TOKEN);
+    assert_eq!(
+        balance(&w.svm, &usdc_mint(), &c.creator.pubkey()),
+        cre_before
+    );
+    assert_eq!(
+        balance(&w.svm, &usdc_mint(), &c.sponsor.pubkey()) - spon_before,
+        PER_TOKEN
+    );
     assert_eq!(spl_amount(&w.svm, &book_escrow_pda(0, 0)), 0);
     assert_eq!(spl_amount(&w.svm, &module_vault_pda(0)), 9); // one token burned
     let d = deliverer_of(&w.svm, &c.lecturer.pubkey());
@@ -151,12 +274,38 @@ fn gbp_full_score_reconciles_escrow() {
     let protocol = w.protocol.pubkey();
 
     // GBP has 2 decimals: base 10_000, fees 830/830/500/340, escrow 12_500.
-    ok(&mut w.svm, create_module_ix(&c.creator.pubkey(), 1, 0, 10), &c.creator, &[&c.creator]);
-    ok(&mut w.svm, sponsor_asset_ix(&c.sponsor.pubkey(), 0, 0, 5, &gbp_mint()), &c.sponsor, &[&c.sponsor]);
-    ok(&mut w.svm, book_asset_ix(&c.school.pubkey(), 0, 0, 0, &gbp_mint()), &c.school, &[&c.school]);
+    ok(
+        &mut w.svm,
+        create_module_ix(&c.creator.pubkey(), 1, 0, 10),
+        &c.creator,
+        &[&c.creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_asset_ix(&c.sponsor.pubkey(), 0, 0, 5, &gbp_mint()),
+        &c.sponsor,
+        &[&c.sponsor],
+    );
+    let d = now_ts(&w.svm);
+    ok(
+        &mut w.svm,
+        book_asset_ix(&c.school.pubkey(), 0, 0, 0, d, &gbp_mint()),
+        &c.school,
+        &[&c.school],
+    );
     assert_eq!(spl_amount(&w.svm, &book_escrow_pda(0, 0)), PER_TOKEN_GBP);
-    ok(&mut w.svm, register_deliverer_ix(&c.lecturer.pubkey()), &c.lecturer, &[&c.lecturer]);
-    ok(&mut w.svm, claim_ix(&c.lecturer.pubkey(), 0, 0), &c.lecturer, &[&c.lecturer]);
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&c.lecturer.pubkey()),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&c.lecturer.pubkey(), 0, 0),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
 
     let cre_before = balance(&w.svm, &gbp_mint(), &c.creator.pubkey());
     let op_before = balance(&w.svm, &gbp_mint(), &operator);
@@ -166,7 +315,19 @@ fn gbp_full_score_reconciles_escrow() {
 
     ok(
         &mut w.svm,
-        submit_score_asset_ix(&c.agent.pubkey(), 0, 0, 10_000, 1, &c.creator.pubkey(), &operator, &protocol, &c.lecturer.pubkey(), &c.sponsor.pubkey(), &gbp_mint()),
+        submit_score_asset_ix(
+            &c.agent.pubkey(),
+            0,
+            0,
+            10_000,
+            1,
+            &c.creator.pubkey(),
+            &operator,
+            &protocol,
+            &c.lecturer.pubkey(),
+            &c.sponsor.pubkey(),
+            &gbp_mint(),
+        ),
         &c.agent,
         &[&c.agent],
     );
@@ -193,11 +354,37 @@ fn gbp_partial_score_floor_precision() {
     let operator = w.operator.pubkey();
     let protocol = w.protocol.pubkey();
 
-    ok(&mut w.svm, create_module_ix(&c.creator.pubkey(), 1, 0, 10), &c.creator, &[&c.creator]);
-    ok(&mut w.svm, sponsor_asset_ix(&c.sponsor.pubkey(), 0, 0, 5, &gbp_mint()), &c.sponsor, &[&c.sponsor]);
-    ok(&mut w.svm, book_asset_ix(&c.school.pubkey(), 0, 0, 0, &gbp_mint()), &c.school, &[&c.school]);
-    ok(&mut w.svm, register_deliverer_ix(&c.lecturer.pubkey()), &c.lecturer, &[&c.lecturer]);
-    ok(&mut w.svm, claim_ix(&c.lecturer.pubkey(), 0, 0), &c.lecturer, &[&c.lecturer]);
+    ok(
+        &mut w.svm,
+        create_module_ix(&c.creator.pubkey(), 1, 0, 10),
+        &c.creator,
+        &[&c.creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_asset_ix(&c.sponsor.pubkey(), 0, 0, 5, &gbp_mint()),
+        &c.sponsor,
+        &[&c.sponsor],
+    );
+    let d = now_ts(&w.svm);
+    ok(
+        &mut w.svm,
+        book_asset_ix(&c.school.pubkey(), 0, 0, 0, d, &gbp_mint()),
+        &c.school,
+        &[&c.school],
+    );
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&c.lecturer.pubkey()),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&c.lecturer.pubkey(), 0, 0),
+        &c.lecturer,
+        &[&c.lecturer],
+    );
 
     let cre_before = balance(&w.svm, &gbp_mint(), &c.creator.pubkey());
     let op_before = balance(&w.svm, &gbp_mint(), &operator);
@@ -208,7 +395,19 @@ fn gbp_partial_score_floor_precision() {
     // 77.77% score at only 2 decimals, so each floor truncates a fraction.
     ok(
         &mut w.svm,
-        submit_score_asset_ix(&c.agent.pubkey(), 0, 0, 7_777, 1, &c.creator.pubkey(), &operator, &protocol, &c.lecturer.pubkey(), &c.sponsor.pubkey(), &gbp_mint()),
+        submit_score_asset_ix(
+            &c.agent.pubkey(),
+            0,
+            0,
+            7_777,
+            1,
+            &c.creator.pubkey(),
+            &operator,
+            &protocol,
+            &c.lecturer.pubkey(),
+            &c.sponsor.pubkey(),
+            &gbp_mint(),
+        ),
         &c.agent,
         &[&c.agent],
     );
@@ -225,7 +424,7 @@ fn gbp_partial_score_floor_precision() {
     assert_eq!(proto, 388); // floor(500 * 0.7777)
     assert_eq!(lec, 8_041); // 7777 + 264
     assert_eq!(refund, 2_781); // escrow - paid, the truncated remainder
-    // Conservation still holds exactly despite the truncation on every part.
+                               // Conservation still holds exactly despite the truncation on every part.
     assert_eq!(cc + ro + proto + lec + refund, PER_TOKEN_GBP);
     assert_eq!(spl_amount(&w.svm, &book_escrow_pda(0, 0)), 0);
 }
@@ -251,9 +450,25 @@ fn fee_ceil_rounds_up_at_creation() {
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
     let school = with_role(&mut w, Role::ModuleBooker);
 
-    ok(&mut w.svm, create_module_ix(&creator.pubkey(), 1, 0, 10), &creator, &[&creator]);
-    ok(&mut w.svm, sponsor_asset_ix(&sponsor.pubkey(), 0, 0, 3, &gbp_mint()), &sponsor, &[&sponsor]);
-    ok(&mut w.svm, book_asset_ix(&school.pubkey(), 0, 0, 0, &gbp_mint()), &school, &[&school]);
+    ok(
+        &mut w.svm,
+        create_module_ix(&creator.pubkey(), 1, 0, 10),
+        &creator,
+        &[&creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_asset_ix(&sponsor.pubkey(), 0, 0, 3, &gbp_mint()),
+        &sponsor,
+        &[&sponsor],
+    );
+    let d = now_ts(&w.svm);
+    ok(
+        &mut w.svm,
+        book_asset_ix(&school.pubkey(), 0, 0, 0, d, &gbp_mint()),
+        &school,
+        &[&school],
+    );
 
     // base 700 + cc 59 + ro 59 + proto 35 + dbs 24 (each rounded up) = 877.
     let escrow = spl_amount(&w.svm, &book_escrow_pda(0, 0));

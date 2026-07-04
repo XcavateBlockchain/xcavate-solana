@@ -5,9 +5,7 @@
 //! price is exactly the base plus every fee part with nothing lost or created.
 
 use proptest::prelude::*;
-use real_x_education::pricing::{
-    bps_floor, fee_ceil, fee_parts, price_per_token, scale_to_asset,
-};
+use real_x_education::pricing::{bps_floor, fee_ceil, fee_parts, price_per_token, scale_to_asset};
 
 /// Exact `floor(a * bps / 10_000)` in u128, used as the reference.
 fn ref_floor(a: u128, bps: u16) -> u128 {

@@ -94,13 +94,15 @@ pub mod real_x_education {
     }
 
     /// Book one token of a sponsored module. ModuleBooker-only; locks a deposit.
+    /// `delivery_at` schedules the session and gates scoring and no-show expiry.
     pub fn book_module(
         ctx: Context<BookModule>,
         module_id: u64,
         sponsor_id: u64,
+        delivery_at: i64,
         metadata: String,
     ) -> Result<()> {
-        booking::book_module_handler(ctx, module_id, sponsor_id, metadata)
+        booking::book_module_handler(ctx, module_id, sponsor_id, delivery_at, metadata)
     }
 
     /// Release the deposit and close a scored booking. ModuleBooker-only.
@@ -162,12 +164,14 @@ pub mod real_x_education {
     }
 
     /// Cancel a claimed booking, taking a strike. ModuleDeliverer-only.
-    pub fn cancel_claim(
-        ctx: Context<CancelClaim>,
-        module_id: u64,
-        booking_id: u64,
-    ) -> Result<()> {
+    pub fn cancel_claim(ctx: Context<CancelClaim>, module_id: u64, booking_id: u64) -> Result<()> {
         cancel::cancel_claim_handler(ctx, module_id, booking_id)
+    }
+
+    /// Expire a no-show lecturer's claim once the delivery grace window passes,
+    /// striking them and freeing the token. Permissionless.
+    pub fn expire_claim(ctx: Context<ExpireClaim>, module_id: u64, booking_id: u64) -> Result<()> {
+        cancel::expire_claim_handler(ctx, module_id, booking_id)
     }
 
     /// Register as a module deliverer (or top up the deposit).
@@ -251,10 +255,7 @@ pub mod real_x_education {
 
     /// Mint the module for an approved proposal with no pre-sponsorship.
     /// ModuleCreator-only (the claimant).
-    pub fn mint_proposed_module(
-        ctx: Context<MintProposedModule>,
-        proposal_id: u64,
-    ) -> Result<()> {
+    pub fn mint_proposed_module(ctx: Context<MintProposedModule>, proposal_id: u64) -> Result<()> {
         proposal::mint_proposed_module_handler(ctx, proposal_id)
     }
 
@@ -268,18 +269,12 @@ pub mod real_x_education {
     }
 
     /// Reclaim a voter's locked XCAV once the proposal's voting window ended.
-    pub fn unlock_proposal_vote(
-        ctx: Context<UnlockProposalVote>,
-        proposal_id: u64,
-    ) -> Result<()> {
+    pub fn unlock_proposal_vote(ctx: Context<UnlockProposalVote>, proposal_id: u64) -> Result<()> {
         proposal::unlock_proposal_vote_handler(ctx, proposal_id)
     }
 
     /// Refund a rejected sponsor proposal's pre-sponsorship. ModuleSponsor-only.
-    pub fn reclaim_pre_sponsor(
-        ctx: Context<ReclaimPreSponsor>,
-        proposal_id: u64,
-    ) -> Result<()> {
+    pub fn reclaim_pre_sponsor(ctx: Context<ReclaimPreSponsor>, proposal_id: u64) -> Result<()> {
         proposal::reclaim_pre_sponsor_handler(ctx, proposal_id)
     }
 

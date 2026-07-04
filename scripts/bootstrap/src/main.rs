@@ -180,11 +180,8 @@ impl Cx {
 
 fn regions_params() -> education_regions::instructions::ConfigParams {
     education_regions::instructions::ConfigParams {
-        proposal_deposit: 1_000 * XCAV,
         minimum_voting_amount: 100 * XCAV,
-        minimum_region_deposit: 10_000 * XCAV,
         voting_period: GOV_WINDOW_SECS,
-        auction_period: GOV_WINDOW_SECS,
         owner_change_period: 60,
         threshold_bps: 5_000,
         quorum: 50_000 * XCAV,
@@ -210,6 +207,7 @@ fn realx_params(usdc: Pubkey, gbp: Pubkey) -> real_x_education::instructions::Co
         min_impact_score_bps: 5_000,
         sponsorship_window: 3_600,
         cancellation_window: 3_600,
+        no_show_grace: 3_600,
         max_cancellations: 3,
         max_strikes: 3,
         strike_slash_bps: 1_000,

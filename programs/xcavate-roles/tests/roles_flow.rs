@@ -4,8 +4,8 @@
 //! end, and nothing here needs a Surfpool integration run.
 
 use anchor_lang::{
-    prelude::Pubkey, solana_program::instruction::Instruction, AccountDeserialize,
-    InstructionData, ToAccountMetas,
+    prelude::Pubkey, solana_program::instruction::Instruction, AccountDeserialize, InstructionData,
+    ToAccountMetas,
 };
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
 use litesvm::LiteSVM;
@@ -130,7 +130,12 @@ fn remove_role_ix(admin: &Pubkey, user: &Pubkey, role: Role) -> Instruction {
     )
 }
 
-fn set_perm_ix(admin: &Pubkey, user: &Pubkey, role: Role, permission: AccessPermission) -> Instruction {
+fn set_perm_ix(
+    admin: &Pubkey,
+    user: &Pubkey,
+    role: Role,
+    permission: AccessPermission,
+) -> Instruction {
     Instruction::new_with_bytes(
         pid(),
         &xcavate_roles::instruction::SetPermission { role, permission }.data(),
@@ -232,7 +237,12 @@ fn setup() -> (LiteSVM, Keypair) {
     .unwrap();
     let authority = funded(&mut svm);
     bind_upgrade_authority(&mut svm, &authority.pubkey());
-    ok(&mut svm, init_ix(&authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
     (svm, authority)
 }
 
@@ -240,7 +250,12 @@ fn setup() -> (LiteSVM, Keypair) {
 fn setup_with_admin() -> (LiteSVM, Keypair, Keypair) {
     let (mut svm, authority) = setup();
     let admin = funded(&mut svm);
-    ok(&mut svm, add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        add_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+    );
     (svm, authority, admin)
 }
 
@@ -260,7 +275,12 @@ fn read_role(svm: &LiteSVM, user: &Pubkey, role: Role) -> RoleAccount {
 fn add_admin_works() {
     let (mut svm, authority) = setup();
     let admin = Keypair::new().pubkey();
-    ok(&mut svm, add_admin_ix(&authority.pubkey(), &admin), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        add_admin_ix(&authority.pubkey(), &admin),
+        &authority,
+        &[&authority],
+    );
 
     let acc = svm.get_account(&admin_pda(&admin)).unwrap();
     let parsed = Admin::try_deserialize(&mut &acc.data[..]).unwrap();
@@ -272,14 +292,26 @@ fn add_admin_fails_for_non_authority() {
     let (mut svm, _authority) = setup();
     let imposter = funded(&mut svm);
     let admin = Keypair::new().pubkey();
-    fails_with(&mut svm, add_admin_ix(&imposter.pubkey(), &admin), &imposter, &[&imposter], "NotAuthority");
+    fails_with(
+        &mut svm,
+        add_admin_ix(&imposter.pubkey(), &admin),
+        &imposter,
+        &[&imposter],
+        "NotAuthority",
+    );
 }
 
 #[test]
 fn add_admin_fails_when_already_admin() {
     let (mut svm, authority, admin) = setup_with_admin();
     // Re-registering the same admin hits the `init` reinit guard.
-    fails_with(&mut svm, add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority], "already in use");
+    fails_with(
+        &mut svm,
+        add_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+        "already in use",
+    );
 }
 
 // ============================ remove_admin ============================
@@ -287,22 +319,41 @@ fn add_admin_fails_when_already_admin() {
 #[test]
 fn remove_admin_works() {
     let (mut svm, authority, admin) = setup_with_admin();
-    ok(&mut svm, remove_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
-    assert!(svm.get_account(&admin_pda(&admin.pubkey())).map_or(true, |a| a.data.is_empty()));
+    ok(
+        &mut svm,
+        remove_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+    );
+    assert!(svm
+        .get_account(&admin_pda(&admin.pubkey()))
+        .map_or(true, |a| a.data.is_empty()));
 }
 
 #[test]
 fn remove_admin_fails_for_non_authority() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let imposter = funded(&mut svm);
-    fails_with(&mut svm, remove_admin_ix(&imposter.pubkey(), &admin.pubkey()), &imposter, &[&imposter], "NotAuthority");
+    fails_with(
+        &mut svm,
+        remove_admin_ix(&imposter.pubkey(), &admin.pubkey()),
+        &imposter,
+        &[&imposter],
+        "NotAuthority",
+    );
 }
 
 #[test]
 fn remove_admin_fails_when_not_admin() {
     let (mut svm, authority) = setup();
     let never_admin = Keypair::new().pubkey();
-    fails_with(&mut svm, remove_admin_ix(&authority.pubkey(), &never_admin), &authority, &[&authority], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        remove_admin_ix(&authority.pubkey(), &never_admin),
+        &authority,
+        &[&authority],
+        "AccountNotInitialized",
+    );
 }
 
 // ============================ assign_role ============================
@@ -311,22 +362,40 @@ fn remove_admin_fails_when_not_admin() {
 fn assign_role_works() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
 
     let parsed = read_role(&svm, &user, Role::ModuleCreator);
     assert_eq!(parsed.user, user);
     assert_eq!(parsed.role, Role::ModuleCreator);
     assert!(parsed.is_compliant());
     // A role that was never granted has no account.
-    assert!(svm.get_account(&role_pda(&user, Role::ModuleBooker)).map_or(true, |a| a.data.is_empty()));
+    assert!(svm
+        .get_account(&role_pda(&user, Role::ModuleBooker))
+        .map_or(true, |a| a.data.is_empty()));
 }
 
 #[test]
 fn assign_role_fails_when_already_assigned() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleBooker), &admin, &[&admin]);
-    fails_with(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleBooker), &admin, &[&admin], "already in use");
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleBooker),
+        &admin,
+        &[&admin],
+    );
+    fails_with(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleBooker),
+        &admin,
+        &[&admin],
+        "already in use",
+    );
 }
 
 #[test]
@@ -334,7 +403,13 @@ fn assign_role_fails_for_non_admin() {
     let (mut svm, _authority) = setup();
     let imposter = funded(&mut svm);
     let user = Keypair::new().pubkey();
-    fails_with(&mut svm, assign_ix(&imposter.pubkey(), &user, Role::ModuleBooker), &imposter, &[&imposter], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        assign_ix(&imposter.pubkey(), &user, Role::ModuleBooker),
+        &imposter,
+        &[&imposter],
+        "AccountNotInitialized",
+    );
 }
 
 // ============================ remove_role ============================
@@ -343,25 +418,54 @@ fn assign_role_fails_for_non_admin() {
 fn remove_role_works() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleSponsor), &admin, &[&admin]);
-    ok(&mut svm, remove_role_ix(&admin.pubkey(), &user, Role::ModuleSponsor), &admin, &[&admin]);
-    assert!(svm.get_account(&role_pda(&user, Role::ModuleSponsor)).map_or(true, |a| a.data.is_empty()));
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleSponsor),
+        &admin,
+        &[&admin],
+    );
+    ok(
+        &mut svm,
+        remove_role_ix(&admin.pubkey(), &user, Role::ModuleSponsor),
+        &admin,
+        &[&admin],
+    );
+    assert!(svm
+        .get_account(&role_pda(&user, Role::ModuleSponsor))
+        .map_or(true, |a| a.data.is_empty()));
 }
 
 #[test]
 fn remove_role_fails_for_non_admin() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleSponsor), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleSponsor),
+        &admin,
+        &[&admin],
+    );
     let imposter = funded(&mut svm);
-    fails_with(&mut svm, remove_role_ix(&imposter.pubkey(), &user, Role::ModuleSponsor), &imposter, &[&imposter], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        remove_role_ix(&imposter.pubkey(), &user, Role::ModuleSponsor),
+        &imposter,
+        &[&imposter],
+        "AccountNotInitialized",
+    );
 }
 
 #[test]
 fn remove_role_fails_when_not_assigned() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    fails_with(&mut svm, remove_role_ix(&admin.pubkey(), &user, Role::ModuleSponsor), &admin, &[&admin], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        remove_role_ix(&admin.pubkey(), &user, Role::ModuleSponsor),
+        &admin,
+        &[&admin],
+        "AccountNotInitialized",
+    );
 }
 
 // ============================ renounce_role ============================
@@ -370,14 +474,26 @@ fn remove_role_fails_when_not_assigned() {
 fn renounce_role_works() {
     let (mut svm, authority, admin) = setup_with_admin();
     let user = funded(&mut svm);
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user.pubkey(), Role::ModuleDeliverer),
+        &admin,
+        &[&admin],
+    );
 
     // The holder gives the role up themselves; the rent goes to the
     // authority, not the holder, since an admin paid it at assignment.
     let user_before = svm.get_account(&user.pubkey()).unwrap().lamports;
     let auth_before = svm.get_account(&authority.pubkey()).unwrap().lamports;
-    ok(&mut svm, renounce_ix(&user.pubkey(), &authority.pubkey(), Role::ModuleDeliverer), &user, &[&user]);
-    assert!(svm.get_account(&role_pda(&user.pubkey(), Role::ModuleDeliverer)).map_or(true, |a| a.data.is_empty()));
+    ok(
+        &mut svm,
+        renounce_ix(&user.pubkey(), &authority.pubkey(), Role::ModuleDeliverer),
+        &user,
+        &[&user],
+    );
+    assert!(svm
+        .get_account(&role_pda(&user.pubkey(), Role::ModuleDeliverer))
+        .map_or(true, |a| a.data.is_empty()));
     assert!(svm.get_account(&authority.pubkey()).unwrap().lamports > auth_before);
     assert!(svm.get_account(&user.pubkey()).unwrap().lamports <= user_before);
 }
@@ -386,21 +502,35 @@ fn renounce_role_works() {
 fn renounce_role_fails_when_not_assigned() {
     let (mut svm, authority, _admin) = setup_with_admin();
     let user = funded(&mut svm);
-    fails_with(&mut svm, renounce_ix(&user.pubkey(), &authority.pubkey(), Role::ModuleSponsor), &user, &[&user], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        renounce_ix(&user.pubkey(), &authority.pubkey(), Role::ModuleSponsor),
+        &user,
+        &[&user],
+        "AccountNotInitialized",
+    );
 }
 
 #[test]
 fn renounce_role_cannot_target_another_user() {
     let (mut svm, authority, admin) = setup_with_admin();
     let victim = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &victim, Role::ModuleSponsor), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &victim, Role::ModuleSponsor),
+        &admin,
+        &[&admin],
+    );
 
     // The role account seed is bound to the signer, so pointing the
     // instruction at someone else's role account cannot derive.
     let attacker = funded(&mut svm);
     let ix = Instruction::new_with_bytes(
         pid(),
-        &xcavate_roles::instruction::RenounceRole { role: Role::ModuleSponsor }.data(),
+        &xcavate_roles::instruction::RenounceRole {
+            role: Role::ModuleSponsor,
+        }
+        .data(),
         xcavate_roles::accounts::RenounceRole {
             user: attacker.pubkey(),
             config: config_pda(),
@@ -416,10 +546,21 @@ fn renounce_role_cannot_target_another_user() {
 fn renounce_role_rejects_wrong_rent_destination() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = funded(&mut svm);
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user.pubkey(), Role::ModuleDeliverer), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user.pubkey(), Role::ModuleDeliverer),
+        &admin,
+        &[&admin],
+    );
 
     // Redirecting the rent anywhere but the configured authority is refused.
-    fails_with(&mut svm, renounce_ix(&user.pubkey(), &user.pubkey(), Role::ModuleDeliverer), &user, &[&user], "ConstraintAddress");
+    fails_with(
+        &mut svm,
+        renounce_ix(&user.pubkey(), &user.pubkey(), Role::ModuleDeliverer),
+        &user,
+        &[&user],
+        "ConstraintAddress",
+    );
 }
 
 // ============================ set_permission ============================
@@ -428,13 +569,38 @@ fn renounce_role_rejects_wrong_rent_destination() {
 fn set_permission_round_trip() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
     assert!(read_role(&svm, &user, Role::ModuleCreator).is_compliant());
 
-    ok(&mut svm, set_perm_ix(&admin.pubkey(), &user, Role::ModuleCreator, AccessPermission::Revoked), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        set_perm_ix(
+            &admin.pubkey(),
+            &user,
+            Role::ModuleCreator,
+            AccessPermission::Revoked,
+        ),
+        &admin,
+        &[&admin],
+    );
     assert!(!read_role(&svm, &user, Role::ModuleCreator).is_compliant());
 
-    ok(&mut svm, set_perm_ix(&admin.pubkey(), &user, Role::ModuleCreator, AccessPermission::Compliant), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        set_perm_ix(
+            &admin.pubkey(),
+            &user,
+            Role::ModuleCreator,
+            AccessPermission::Compliant,
+        ),
+        &admin,
+        &[&admin],
+    );
     assert!(read_role(&svm, &user, Role::ModuleCreator).is_compliant());
 }
 
@@ -442,28 +608,86 @@ fn set_permission_round_trip() {
 fn set_permission_fails_when_role_not_assigned() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
     // Different, unassigned role -> no account to mutate.
-    fails_with(&mut svm, set_perm_ix(&admin.pubkey(), &user, Role::ModuleBooker, AccessPermission::Revoked), &admin, &[&admin], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        set_perm_ix(
+            &admin.pubkey(),
+            &user,
+            Role::ModuleBooker,
+            AccessPermission::Revoked,
+        ),
+        &admin,
+        &[&admin],
+        "AccountNotInitialized",
+    );
 }
 
 #[test]
 fn set_permission_fails_for_non_admin() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
     let imposter = funded(&mut svm);
-    fails_with(&mut svm, set_perm_ix(&imposter.pubkey(), &user, Role::ModuleCreator, AccessPermission::Revoked), &imposter, &[&imposter], "AccountNotInitialized");
+    fails_with(
+        &mut svm,
+        set_perm_ix(
+            &imposter.pubkey(),
+            &user,
+            Role::ModuleCreator,
+            AccessPermission::Revoked,
+        ),
+        &imposter,
+        &[&imposter],
+        "AccountNotInitialized",
+    );
 }
 
 #[test]
 fn set_permission_fails_when_already_set() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
-    ok(&mut svm, set_perm_ix(&admin.pubkey(), &user, Role::ModuleCreator, AccessPermission::Revoked), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
+    ok(
+        &mut svm,
+        set_perm_ix(
+            &admin.pubkey(),
+            &user,
+            Role::ModuleCreator,
+            AccessPermission::Revoked,
+        ),
+        &admin,
+        &[&admin],
+    );
     // Revoking again is a no-op the program rejects.
-    fails_with(&mut svm, set_perm_ix(&admin.pubkey(), &user, Role::ModuleCreator, AccessPermission::Revoked), &admin, &[&admin], "PermissionAlreadySet");
+    fails_with(
+        &mut svm,
+        set_perm_ix(
+            &admin.pubkey(),
+            &user,
+            Role::ModuleCreator,
+            AccessPermission::Revoked,
+        ),
+        &admin,
+        &[&admin],
+        "PermissionAlreadySet",
+    );
 }
 
 // ============================ update_authority ============================
@@ -472,20 +696,42 @@ fn set_permission_fails_when_already_set() {
 fn update_authority_works() {
     let (mut svm, authority) = setup();
     let new_authority = funded(&mut svm);
-    ok(&mut svm, update_authority_ix(&authority.pubkey(), new_authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        update_authority_ix(&authority.pubkey(), new_authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
     assert_eq!(read_config(&svm).authority, new_authority.pubkey());
 
     // Old authority can no longer manage admins; the new one can.
     let admin = Keypair::new().pubkey();
-    fails_with(&mut svm, add_admin_ix(&authority.pubkey(), &admin), &authority, &[&authority], "NotAuthority");
-    ok(&mut svm, add_admin_ix(&new_authority.pubkey(), &admin), &new_authority, &[&new_authority]);
+    fails_with(
+        &mut svm,
+        add_admin_ix(&authority.pubkey(), &admin),
+        &authority,
+        &[&authority],
+        "NotAuthority",
+    );
+    ok(
+        &mut svm,
+        add_admin_ix(&new_authority.pubkey(), &admin),
+        &new_authority,
+        &[&new_authority],
+    );
 }
 
 #[test]
 fn update_authority_fails_for_non_authority() {
     let (mut svm, _authority) = setup();
     let imposter = funded(&mut svm);
-    fails_with(&mut svm, update_authority_ix(&imposter.pubkey(), imposter.pubkey()), &imposter, &[&imposter], "NotAuthority");
+    fails_with(
+        &mut svm,
+        update_authority_ix(&imposter.pubkey(), imposter.pubkey()),
+        &imposter,
+        &[&imposter],
+        "NotAuthority",
+    );
 }
 
 #[test]
@@ -507,7 +753,13 @@ fn update_authority_fails_for_zero_address() {
 fn initialize_config_fails_on_double_init() {
     let (mut svm, authority) = setup();
     // The config is a singleton PDA; a second init hits the existing account.
-    fails_with(&mut svm, init_ix(&authority.pubkey()), &authority, &[&authority], "already in use");
+    fails_with(
+        &mut svm,
+        init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+        "already in use",
+    );
 }
 
 #[test]
@@ -516,11 +768,27 @@ fn assign_multiple_distinct_roles_coexist() {
     let user = Keypair::new().pubkey();
 
     // Two different roles for one user live in independent PDAs (seed-byte isolation).
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::RegionalOperator), &admin, &[&admin]);
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::RegionalOperator),
+        &admin,
+        &[&admin],
+    );
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
 
-    assert_eq!(read_role(&svm, &user, Role::RegionalOperator).role, Role::RegionalOperator);
-    assert_eq!(read_role(&svm, &user, Role::ModuleCreator).role, Role::ModuleCreator);
+    assert_eq!(
+        read_role(&svm, &user, Role::RegionalOperator).role,
+        Role::RegionalOperator
+    );
+    assert_eq!(
+        read_role(&svm, &user, Role::ModuleCreator).role,
+        Role::ModuleCreator
+    );
 }
 
 #[test]
@@ -528,11 +796,29 @@ fn reassign_role_after_removal() {
     let (mut svm, _authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
 
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
-    ok(&mut svm, remove_role_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
+    ok(
+        &mut svm,
+        remove_role_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
     // The PDA was closed; assigning again must re-create it cleanly.
-    ok(&mut svm, assign_ix(&admin.pubkey(), &user, Role::ModuleCreator), &admin, &[&admin]);
-    assert_eq!(read_role(&svm, &user, Role::ModuleCreator).role, Role::ModuleCreator);
+    ok(
+        &mut svm,
+        assign_ix(&admin.pubkey(), &user, Role::ModuleCreator),
+        &admin,
+        &[&admin],
+    );
+    assert_eq!(
+        read_role(&svm, &user, Role::ModuleCreator).role,
+        Role::ModuleCreator
+    );
 }
 
 #[test]
@@ -540,7 +826,12 @@ fn removed_admin_loses_power() {
     let (mut svm, authority, admin) = setup_with_admin();
     let user = Keypair::new().pubkey();
 
-    ok(&mut svm, remove_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        remove_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+    );
     // With the Admin PDA closed, the ex-admin's account no longer resolves.
     fails_with(
         &mut svm,
@@ -566,8 +857,19 @@ fn initialize_config_requires_upgrade_authority() {
 
     // Someone other than the deployer cannot claim the config.
     let imposter = funded(&mut svm);
-    fails_with(&mut svm, init_ix(&imposter.pubkey()), &imposter, &[&imposter], "NotUpgradeAuthority");
+    fails_with(
+        &mut svm,
+        init_ix(&imposter.pubkey()),
+        &imposter,
+        &[&imposter],
+        "NotUpgradeAuthority",
+    );
 
     // The deployer can.
-    ok(&mut svm, init_ix(&deployer.pubkey()), &deployer, &[&deployer]);
+    ok(
+        &mut svm,
+        init_ix(&deployer.pubkey()),
+        &deployer,
+        &[&deployer],
+    );
 }

@@ -3,14 +3,17 @@ use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 use crate::constants::{CONFIG_SEED, PROPOSAL_SEED, REGION_SEED, REGION_STATE_SEED, VAULT_SEED};
 use crate::error::RegionsError;
-use crate::state::{Config, RegionIdentifier, RegionProposal, RegionState, RegionStatus};
+use crate::state::{
+    operator_bond, Config, RegionIdentifier, RegionProposal, RegionState, RegionStatus,
+};
 use crate::vault::lock_to_vault;
 
 use xcavate_roles::state::{Role, RoleAccount};
 
 /// Propose a new region. The caller must be a RegionalOperator, the region must
 /// not already exist, and there must be no other open proposal for it. The
-/// proposer's deposit is locked in the vault.
+/// proposer bonds 0.1% of the XCAV supply into the vault; it is returned if the
+/// proposal is rejected and becomes the region's collateral once claimed.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct ProposeNewRegion<'info> {
@@ -18,7 +21,7 @@ pub struct ProposeNewRegion<'info> {
     pub proposer: Signer<'info>,
 
     #[account(mut, seeds = [CONFIG_SEED], bump = config.bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     /// The XCAV mint (for `transfer_checked`).
     #[account(address = config.xcav_mint @ RegionsError::InvalidMint)]
@@ -52,7 +55,7 @@ pub struct ProposeNewRegion<'info> {
         bump = operator_role.bump,
         seeds::program = xcavate_roles::ID,
     )]
-    pub operator_role: Account<'info, RoleAccount>,
+    pub operator_role: Box<Account<'info, RoleAccount>>,
 
     /// CHECK: canonical region PDA; must be empty, i.e. the region isn't created yet.
     #[account(
@@ -69,7 +72,7 @@ pub struct ProposeNewRegion<'info> {
         seeds = [REGION_STATE_SEED, &region_id.to_le_bytes()],
         bump,
     )]
-    pub region_state: Account<'info, RegionState>,
+    pub region_state: Box<Account<'info, RegionState>>,
 
     #[account(
         init,
@@ -78,7 +81,7 @@ pub struct ProposeNewRegion<'info> {
         seeds = [PROPOSAL_SEED, &config.proposal_counter.to_le_bytes()],
         bump,
     )]
-    pub proposal: Account<'info, RegionProposal>,
+    pub proposal: Box<Account<'info, RegionProposal>>,
 
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
@@ -92,10 +95,10 @@ pub fn propose_new_region_handler(ctx: Context<ProposeNewRegion>, region_id: u16
 
     let clock = Clock::get()?;
     let proposal_id = ctx.accounts.config.proposal_counter;
-    let deposit = ctx.accounts.config.proposal_deposit;
+    let deposit = operator_bond(ctx.accounts.xcav_mint.supply).ok_or(RegionsError::BondTooSmall)?;
     let voting_period = ctx.accounts.config.voting_period;
 
-    // Lock the proposer's XCAV deposit in the vault.
+    // Lock the proposer's XCAV bond in the vault.
     lock_to_vault(
         &ctx.accounts.token_program.to_account_info(),
         &ctx.accounts.proposer_token.to_account_info(),
@@ -112,7 +115,6 @@ pub fn propose_new_region_handler(ctx: Context<ProposeNewRegion>, region_id: u16
     proposal.region_id = region_id;
     proposal.created_at = clock.unix_timestamp;
     proposal.expiry = clock.unix_timestamp.saturating_add(voting_period);
-    proposal.deposit = deposit;
     proposal.yes_power = 0;
     proposal.no_power = 0;
     proposal.abstain_power = 0;
@@ -122,9 +124,9 @@ pub fn propose_new_region_handler(ctx: Context<ProposeNewRegion>, region_id: u16
     region_state.region_id = region_id;
     region_state.status = RegionStatus::Proposing;
     region_state.proposal_id = proposal_id;
-    region_state.highest_bidder = None;
-    region_state.collateral = 0;
-    region_state.auction_expiry = 0;
+    region_state.proposer = ctx.accounts.proposer.key();
+    region_state.deposit = deposit;
+    region_state.claim_deadline = 0;
     region_state.bump = ctx.bumps.region_state;
 
     ctx.accounts.config.proposal_counter =

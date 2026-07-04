@@ -119,4 +119,10 @@ pub enum EducationError {
     /// The signer is not the program's upgrade authority.
     #[msg("Signer is not the program upgrade authority")]
     NotUpgradeAuthority,
+    /// A score was submitted before the scheduled delivery time.
+    #[msg("Delivery time has not been reached")]
+    DeliveryNotReached,
+    /// The no-show grace window past the scheduled delivery has not elapsed.
+    #[msg("No-show window has not expired")]
+    NoShowWindowNotExpired,
 }

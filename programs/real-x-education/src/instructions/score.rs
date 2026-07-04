@@ -144,6 +144,11 @@ pub fn submit_impact_score_handler(
         ctx.accounts.lecturer_payment.owner == lecturer,
         EducationError::WrongPayoutRecipient
     );
+    // A score can't be settled before the session was scheduled to be delivered.
+    require!(
+        Clock::get()?.unix_timestamp >= ctx.accounts.booking.delivery_at,
+        EducationError::DeliveryNotReached
+    );
 
     let decimals = ctx.accounts.payment_mint.decimals;
     let total_module_price = ctx.accounts.booking.price_per_token as u128;

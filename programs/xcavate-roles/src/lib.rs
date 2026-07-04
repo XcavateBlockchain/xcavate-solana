@@ -27,10 +27,7 @@ pub mod xcavate_roles {
     }
 
     /// Rotate the sudo authority. Current-authority-only.
-    pub fn update_authority(
-        ctx: Context<UpdateAuthority>,
-        new_authority: Pubkey,
-    ) -> Result<()> {
+    pub fn update_authority(ctx: Context<UpdateAuthority>, new_authority: Pubkey) -> Result<()> {
         initialize::update_authority_handler(ctx, new_authority)
     }
 

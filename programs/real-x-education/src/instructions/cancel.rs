@@ -34,17 +34,9 @@ pub struct CancelBooking<'info> {
     )]
     pub module: Box<Account<'info, Module>>,
 
-    #[account(
-        seeds = [
-            xcavate_roles::ROLE_SEED,
-            school.key().as_ref(),
-            &[Role::ModuleBooker.seed_byte()],
-        ],
-        bump = school_role.bump,
-        seeds::program = xcavate_roles::ID,
-    )]
-    pub school_role: Box<Account<'info, RoleAccount>>,
-
+    // Gated by ownership, not by an active ModuleBooker role: the `booking.school`
+    // constraint below already restricts this to the booking's own school, which
+    // is all that's needed to unwind it and recover the deposit.
     #[account(
         mut,
         close = school,
@@ -212,7 +204,10 @@ pub fn cancel_booking_handler(
             .deliverer
             .as_mut()
             .ok_or(EducationError::MissingAccount)?;
-        require!(deliverer.deliverer == lect, EducationError::WrongPayoutRecipient);
+        require!(
+            deliverer.deliverer == lect,
+            EducationError::WrongPayoutRecipient
+        );
         deliverer.active_claims = deliverer
             .active_claims
             .checked_sub(1)
@@ -238,15 +233,21 @@ pub fn cancel_booking_handler(
     cancellation.created_at = clock.unix_timestamp;
     cancellation.bump = ctx.bumps.cancellation;
 
-    // The booking escrow has been drained back to the sponsor, so close it and
-    // return its rent to the school along with the closed booking record.
-    close_vault_account(
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.booking_escrow.to_account_info(),
-        &ctx.accounts.school.to_account_info(),
-        &ctx.accounts.config.to_account_info(),
-        config_bump,
-    )?;
+    // The booking escrow was drained back to the sponsor, so close it to return
+    // its rent to the school alongside the closed booking record, but only if it
+    // is actually empty. A stray transfer into the account would make the SPL
+    // close fail and revert the whole cancellation, so any residual balance leaves
+    // the escrow behind while the deposit refund still stands.
+    ctx.accounts.booking_escrow.reload()?;
+    if ctx.accounts.booking_escrow.amount == 0 {
+        close_vault_account(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.booking_escrow.to_account_info(),
+            &ctx.accounts.school.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            config_bump,
+        )?;
+    }
 
     emit!(BookingCancelled {
         module_id,
@@ -269,17 +270,9 @@ pub struct ClearOldCancellation<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
 
-    #[account(
-        seeds = [
-            xcavate_roles::ROLE_SEED,
-            school.key().as_ref(),
-            &[Role::ModuleBooker.seed_byte()],
-        ],
-        bump = school_role.bump,
-        seeds::program = xcavate_roles::ID,
-    )]
-    pub school_role: Box<Account<'info, RoleAccount>>,
-
+    // Gated by ownership: the counter and cancellation PDAs are seeded by the
+    // school, so a school only ever clears its own aged-out records, with no
+    // ModuleBooker role needed.
     #[account(
         mut,
         seeds = [CANCEL_COUNTER_SEED, school.key().as_ref()],
@@ -458,6 +451,157 @@ pub fn cancel_claim_handler(
     Ok(())
 }
 
+/// Expire a claimed booking whose lecturer never delivered. Permissionless once
+/// the no-show grace window past the scheduled delivery has passed and no score
+/// landed. Strikes the absent lecturer (slashing at the ceiling) and frees the
+/// token to be claimed again. It leaves the school's cancellation count
+/// untouched, so the no-show is charged to the party at fault rather than the
+/// victim.
+#[derive(Accounts)]
+#[instruction(module_id: u64, booking_id: u64)]
+pub struct ExpireClaim<'info> {
+    #[account(mut)]
+    pub cranker: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(
+        mut,
+        seeds = [MODULE_SEED, &module_id.to_le_bytes()],
+        bump = module.bump,
+    )]
+    pub module: Box<Account<'info, Module>>,
+
+    /// CHECK: the lecturer who claimed the booking. Used to derive the deliverer
+    /// PDA and checked against `booking.lecturer` in the handler.
+    pub lecturer: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        seeds = [DELIVERER_SEED, lecturer.key().as_ref()],
+        bump = deliverer.bump,
+    )]
+    pub deliverer: Box<Account<'info, Deliverer>>,
+
+    #[account(
+        mut,
+        seeds = [BOOKING_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
+        bump = booking.bump,
+    )]
+    pub booking: Box<Account<'info, Booking>>,
+
+    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut, address = config.treasury @ EducationError::InvalidTreasury)]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+pub fn expire_claim_handler(
+    ctx: Context<ExpireClaim>,
+    module_id: u64,
+    booking_id: u64,
+) -> Result<()> {
+    let lecturer = ctx
+        .accounts
+        .booking
+        .lecturer
+        .ok_or(EducationError::NoLecturerSet)?;
+    // The supplied lecturer account (which seeds the deliverer PDA to strike)
+    // must be the one that claimed the booking.
+    require!(
+        lecturer == ctx.accounts.lecturer.key(),
+        EducationError::NoPermission
+    );
+    require!(
+        ctx.accounts.booking.score.is_none(),
+        EducationError::ScoreAlreadySet
+    );
+
+    // The no-show grace window past the scheduled delivery must have elapsed.
+    let now = Clock::get()?.unix_timestamp;
+    let deadline = ctx
+        .accounts
+        .booking
+        .delivery_at
+        .saturating_add(ctx.accounts.config.no_show_grace);
+    require!(now > deadline, EducationError::NoShowWindowNotExpired);
+
+    // Strike the lecturer, slashing the deposit once the ceiling is hit (mirrors
+    // cancel_claim, which the lecturer would call on themselves).
+    let strikes = ctx
+        .accounts
+        .deliverer
+        .active_strikes
+        .checked_add(1)
+        .ok_or(EducationError::Overflow)?;
+
+    if strikes >= ctx.accounts.config.max_strikes {
+        let slash_full = u64::try_from(fee_ceil(
+            ctx.accounts.config.deliverer_deposit as u128,
+            ctx.accounts.config.strike_slash_bps,
+        )?)
+        .map_err(|_| EducationError::Overflow)?;
+        let slash = slash_full.min(ctx.accounts.deliverer.deposit);
+        if slash > 0 {
+            release_from_vault(
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.vault.to_account_info(),
+                &ctx.accounts.xcav_mint.to_account_info(),
+                &ctx.accounts.treasury.to_account_info(),
+                &ctx.accounts.config.to_account_info(),
+                ctx.accounts.config.bump,
+                slash,
+                ctx.accounts.xcav_mint.decimals,
+            )?;
+            ctx.accounts.deliverer.deposit = ctx
+                .accounts
+                .deliverer
+                .deposit
+                .checked_sub(slash)
+                .ok_or(EducationError::Underflow)?;
+        }
+    }
+
+    let booking = &mut ctx.accounts.booking;
+    booking.lecturer = None;
+    booking.claimed_at = None;
+
+    let deliverer = &mut ctx.accounts.deliverer;
+    deliverer.active_strikes = strikes;
+    deliverer.active_claims = deliverer
+        .active_claims
+        .checked_sub(1)
+        .ok_or(EducationError::Underflow)?;
+
+    ctx.accounts.module.student_allocation = ctx
+        .accounts
+        .module
+        .student_allocation
+        .checked_add(1)
+        .ok_or(EducationError::Overflow)?;
+
+    emit!(ClaimExpired {
+        module_id,
+        booking_id,
+        lecturer,
+        active_strikes: strikes,
+    });
+    Ok(())
+}
+
 #[event]
 pub struct BookingCancelled {
     pub module_id: u64,
@@ -465,6 +609,14 @@ pub struct BookingCancelled {
     pub school: Pubkey,
     pub cancellation_count: u32,
     pub deposit_slashed: bool,
+}
+
+#[event]
+pub struct ClaimExpired {
+    pub module_id: u64,
+    pub booking_id: u64,
+    pub lecturer: Pubkey,
+    pub active_strikes: u8,
 }
 
 #[event]

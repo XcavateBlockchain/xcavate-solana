@@ -20,14 +20,14 @@ pub use education_regions::state::{
     Config as RegionsConfig, RegionProposal, RegionState, RegionStatus, Vote, VoteRecord,
 };
 pub use litesvm::LiteSVM;
-pub use xcavate_roles::state::Role;
 pub use solana_keypair::Keypair;
 pub use solana_signer::Signer;
+pub use xcavate_roles::state::Role;
 
 use anchor_lang::solana_program::instruction::Instruction;
-use anchor_lang::{InstructionData, ToAccountMetas};
 use anchor_lang::solana_program::program_option::COption;
 use anchor_lang::solana_program::program_pack::Pack;
+use anchor_lang::{InstructionData, ToAccountMetas};
 use anchor_spl::token::spl_token::state::{Account as SplAccount, AccountState, Mint as SplMint};
 use anchor_spl::token::ID as TOKEN_PROGRAM_ID;
 use litesvm::types::{FailedTransactionMetadata, TransactionMetadata};
@@ -36,7 +36,9 @@ use solana_message::{Message, VersionedMessage};
 use solana_transaction::versioned::VersionedTransaction;
 
 use education_regions::instructions::ConfigParams;
-use education_regions::{CONFIG_SEED, PROPOSAL_SEED, REGION_SEED, REGION_STATE_SEED, VAULT_SEED, VOTE_SEED};
+use education_regions::{
+    CONFIG_SEED, PROPOSAL_SEED, REGION_SEED, REGION_STATE_SEED, VAULT_SEED, VOTE_SEED,
+};
 
 pub const SYS: Pubkey = anchor_lang::system_program::ID;
 pub const DEPOSIT: u64 = 1_000_000_000;
@@ -108,7 +110,8 @@ pub fn token_acc(owner: &Pubkey) -> Pubkey {
 pub fn set_mint(svm: &mut LiteSVM) {
     let mint = SplMint {
         mint_authority: COption::None,
-        supply: 0,
+        // Chosen so the 0.1% operator bond (supply / 1000) equals DEPOSIT.
+        supply: DEPOSIT * 1_000,
         decimals: DECIMALS,
         is_initialized: true,
         freeze_authority: COption::None,
@@ -200,12 +203,21 @@ pub fn ok(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keypa
     }
 }
 
-pub fn fails_with(svm: &mut LiteSVM, ix: Instruction, payer: &Keypair, signers: &[&Keypair], expected: &str) {
+pub fn fails_with(
+    svm: &mut LiteSVM,
+    ix: Instruction,
+    payer: &Keypair,
+    signers: &[&Keypair],
+    expected: &str,
+) {
     match process(svm, ix, payer, signers) {
         Ok(_) => panic!("expected failure `{expected}`, but it succeeded"),
         Err(failed) => {
             let detail = format!("{:?}\n{}", failed.err, failed.meta.logs.join("\n"));
-            assert!(detail.contains(expected), "expected `{expected}`, got:\n{detail}");
+            assert!(
+                detail.contains(expected),
+                "expected `{expected}`, got:\n{detail}"
+            );
         }
     }
 }
@@ -309,11 +321,8 @@ pub fn roles_assign_ix(admin: &Pubkey, user: &Pubkey, role: Role) -> Instruction
 
 pub fn default_params() -> ConfigParams {
     ConfigParams {
-        proposal_deposit: DEPOSIT,
         minimum_voting_amount: 100_000_000,
-        minimum_region_deposit: 500_000_000,
         voting_period: 1_000,
-        auction_period: 1_000,
         owner_change_period: 10_000,
         threshold_bps: 5_000,
         quorum: 100_000_000,
@@ -360,7 +369,11 @@ pub fn update_config_ix(authority: &Pubkey, params: ConfigParams) -> Instruction
     )
 }
 
-pub fn withdraw_treasury_ix(authority: &Pubkey, destination_owner: &Pubkey, amount: u64) -> Instruction {
+pub fn withdraw_treasury_ix(
+    authority: &Pubkey,
+    destination_owner: &Pubkey,
+    amount: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::WithdrawTreasury { amount }.data(),
@@ -379,7 +392,10 @@ pub fn withdraw_treasury_ix(authority: &Pubkey, destination_owner: &Pubkey, amou
 pub fn update_authority_ix(authority: &Pubkey, new_authority: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
-        &education_regions::instruction::UpdateAuthority { new_authority: *new_authority }.data(),
+        &education_regions::instruction::UpdateAuthority {
+            new_authority: *new_authority,
+        }
+        .data(),
         education_regions::accounts::UpdateAuthority {
             authority: *authority,
             config: regions_config(),
@@ -409,10 +425,21 @@ pub fn propose_ix(proposer: &Pubkey, region_id: u16, proposal_id: u64) -> Instru
     )
 }
 
-pub fn vote_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, vote: Vote, amount: u64) -> Instruction {
+pub fn vote_ix(
+    voter: &Pubkey,
+    region_id: u16,
+    proposal_id: u64,
+    vote: Vote,
+    amount: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
-        &education_regions::instruction::VoteOnRegionProposal { region_id, vote, amount }.data(),
+        &education_regions::instruction::VoteOnRegionProposal {
+            region_id,
+            vote,
+            amount,
+        }
+        .data(),
         education_regions::accounts::VoteOnRegionProposal {
             voter: *voter,
             config: regions_config(),
@@ -429,7 +456,12 @@ pub fn vote_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, vote: Vote, amo
     )
 }
 
-pub fn finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey) -> Instruction {
+pub fn finalize_ix(
+    cranker: &Pubkey,
+    region_id: u16,
+    proposal_id: u64,
+    proposer: &Pubkey,
+) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::FinalizeRegionProposal { region_id }.data(),
@@ -442,7 +474,6 @@ pub fn finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer:
             proposal: proposal_pda(proposal_id),
             proposer: *proposer,
             proposer_token: Some(token_acc(proposer)),
-            treasury: treasury_pda(),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -451,7 +482,12 @@ pub fn finalize_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer:
 
 // Finalize without any proposer token account, as a cranker would when the
 // proposer has closed theirs. Only the reject path can settle this way.
-pub fn finalize_no_token_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, proposer: &Pubkey) -> Instruction {
+pub fn finalize_no_token_ix(
+    cranker: &Pubkey,
+    region_id: u16,
+    proposal_id: u64,
+    proposer: &Pubkey,
+) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::FinalizeRegionProposal { region_id }.data(),
@@ -464,43 +500,48 @@ pub fn finalize_no_token_ix(cranker: &Pubkey, region_id: u16, proposal_id: u64, 
             proposal: proposal_pda(proposal_id),
             proposer: *proposer,
             proposer_token: None,
-            treasury: treasury_pda(),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
 }
 
-pub fn bid_ix(bidder: &Pubkey, region_id: u16, amount: u64, previous: Option<Pubkey>) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::BidOnRegion { region_id, amount }.data(),
-        education_regions::accounts::BidOnRegion {
-            bidder: *bidder,
-            config: regions_config(),
-            operator_role: role_pda(bidder, Role::RegionalOperator),
-            xcav_mint: xcav_mint(),
-            bidder_token: token_acc(bidder),
-            vault: vault(),
-            region_state: region_state(region_id),
-            previous_bidder_token: previous.as_ref().map(token_acc),
-            token_program: TOKEN_PROGRAM_ID,
-        }
-        .to_account_metas(None),
-    )
-}
-
+/// Claim a passed region (the proposer creates it).
 pub fn create_region_ix(creator: &Pubkey, region_id: u16) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
-        &education_regions::instruction::CreateNewRegion { region_id }.data(),
-        education_regions::accounts::CreateNewRegion {
+        &education_regions::instruction::CreateRegion { region_id }.data(),
+        education_regions::accounts::CreateRegion {
             creator: *creator,
-            creator_role: role_pda(creator, Role::RegionalOperator),
             config: regions_config(),
+            creator_role: role_pda(creator, Role::RegionalOperator),
             region_state: region_state(region_id),
             region: region_pda(region_id),
             system_program: SYS,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Claim an existing region whose seat is open, bonding 0.1% of XCAV supply.
+pub fn claim_open_region_ix(
+    new_operator: &Pubkey,
+    region_id: u16,
+    old_owner: &Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::ClaimOpenRegion { region_id }.data(),
+        education_regions::accounts::ClaimOpenRegion {
+            new_operator: *new_operator,
+            config: regions_config(),
+            operator_role: role_pda(new_operator, Role::RegionalOperator),
+            xcav_mint: xcav_mint(),
+            new_operator_token: token_acc(new_operator),
+            vault: vault(),
+            region: region_pda(region_id),
+            old_owner_token: token_acc(old_owner),
+            token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
@@ -523,13 +564,18 @@ pub fn unlock_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
     )
 }
 
-pub fn clear_ix(cranker: &Pubkey, region_id: u16) -> Instruction {
+pub fn clear_ix(cranker: &Pubkey, region_id: u16, proposer: &Pubkey) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
         &education_regions::instruction::ClearRegionState { region_id }.data(),
         education_regions::accounts::ClearRegionState {
             cranker: *cranker,
+            config: regions_config(),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
             region_state: region_state(region_id),
+            proposer_token: Some(token_acc(proposer)),
+            token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
     )
@@ -563,10 +609,20 @@ pub fn setup() -> (LiteSVM, Keypair, Keypair) {
     give_xcav(&mut svm, &authority.pubkey(), 0); // treasury account
     bind_upgrade_authority(&mut svm, &roles_id(), &authority.pubkey());
     bind_upgrade_authority(&mut svm, &rid(), &authority.pubkey());
-    ok(&mut svm, roles_init_ix(&authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        roles_init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     let admin = funded(&mut svm);
-    ok(&mut svm, roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        &authority,
+        &[&authority],
+    );
 
     let operator = actor(&mut svm);
     ok(
@@ -576,19 +632,31 @@ pub fn setup() -> (LiteSVM, Keypair, Keypair) {
         &[&admin],
     );
 
-    ok(&mut svm, regions_init_ix(&authority.pubkey()), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        regions_init_ix(&authority.pubkey()),
+        &authority,
+        &[&authority],
+    );
     (svm, operator, authority)
 }
 
 pub fn next_proposal_id(svm: &LiteSVM) -> u64 {
     let acc = svm.get_account(&regions_config()).unwrap();
-    RegionsConfig::try_deserialize(&mut &acc.data[..]).unwrap().proposal_counter
+    RegionsConfig::try_deserialize(&mut &acc.data[..])
+        .unwrap()
+        .proposal_counter
 }
 
 // Adds a second compliant RegionalOperator (with XCAV).
 pub fn new_operator(svm: &mut LiteSVM, authority: &Keypair) -> Keypair {
     let admin = funded(svm);
-    ok(svm, roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()), authority, &[authority]);
+    ok(
+        svm,
+        roles_add_admin_ix(&authority.pubkey(), &admin.pubkey()),
+        authority,
+        &[authority],
+    );
     let op = actor(svm);
     ok(
         svm,
@@ -599,12 +667,22 @@ pub fn new_operator(svm: &mut LiteSVM, authority: &Keypair) -> Keypair {
     op
 }
 
-// Drives region 1 to the Auctioning state and returns the proposal id.
-pub fn reach_auctioning(svm: &mut LiteSVM, operator: &Keypair, _authority: &Keypair) -> u64 {
+// Drives region 1 to the Passed state (proposal claimable) and returns the id.
+pub fn reach_passed(svm: &mut LiteSVM, operator: &Keypair, _authority: &Keypair) -> u64 {
     let id = next_proposal_id(svm);
-    ok(svm, propose_ix(&operator.pubkey(), 1, id), operator, &[operator]);
+    ok(
+        svm,
+        propose_ix(&operator.pubkey(), 1, id),
+        operator,
+        &[operator],
+    );
     let voter = actor(svm);
-    ok(svm, vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        svm,
+        vote_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
     warp_past_voting(svm);
     let cranker = funded(svm);
     ok(
@@ -625,26 +703,25 @@ pub fn region_state_of(svm: &LiteSVM, region_id: u16) -> RegionState {
 
 pub fn removal_proposal_pda(region_id: u16) -> Pubkey {
     Pubkey::find_program_address(
-        &[education_regions::REMOVAL_PROPOSAL_SEED, &region_id.to_le_bytes()],
+        &[
+            education_regions::REMOVAL_PROPOSAL_SEED,
+            &region_id.to_le_bytes(),
+        ],
         &rid(),
     )
     .0
 }
 pub fn removal_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
     Pubkey::find_program_address(
-        &[education_regions::REMOVAL_VOTE_SEED, &proposal_id.to_le_bytes(), voter.as_ref()],
+        &[
+            education_regions::REMOVAL_VOTE_SEED,
+            &proposal_id.to_le_bytes(),
+            voter.as_ref(),
+        ],
         &rid(),
     )
     .0
 }
-pub fn replacement_auction_pda(region_id: u16) -> Pubkey {
-    Pubkey::find_program_address(
-        &[education_regions::REPLACEMENT_AUCTION_SEED, &region_id.to_le_bytes()],
-        &rid(),
-    )
-    .0
-}
-
 pub fn region_of(svm: &LiteSVM, region_id: u16) -> education_regions::state::Region {
     education_regions::state::Region::try_deserialize(
         &mut &svm.get_account(&region_pda(region_id)).unwrap().data[..],
@@ -662,10 +739,15 @@ pub fn warp(svm: &mut LiteSVM, secs: i64) {
 /// Drives region 1 all the way to a created region owned by `operator` with a
 /// 600M collateral.
 pub fn reach_created(svm: &mut LiteSVM, operator: &Keypair, authority: &Keypair) {
-    reach_auctioning(svm, operator, authority);
-    ok(svm, bid_ix(&operator.pubkey(), 1, 600_000_000, None), operator, &[operator]);
-    warp_past_voting(svm);
-    ok(svm, create_region_ix(&operator.pubkey(), 1), operator, &[operator]);
+    reach_passed(svm, operator, authority);
+    // The proposer claims the passed region; the bond (DEPOSIT) becomes its
+    // collateral.
+    ok(
+        svm,
+        create_region_ix(&operator.pubkey(), 1),
+        operator,
+        &[operator],
+    );
 }
 
 /// Drives region 1 to a created region, then opens the seat via the operator's
@@ -695,10 +777,21 @@ pub fn propose_remove_ix(proposer: &Pubkey, region_id: u16) -> Instruction {
     )
 }
 
-pub fn vote_removal_ix(voter: &Pubkey, region_id: u16, proposal_id: u64, vote: Vote, amount: u64) -> Instruction {
+pub fn vote_removal_ix(
+    voter: &Pubkey,
+    region_id: u16,
+    proposal_id: u64,
+    vote: Vote,
+    amount: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         rid(),
-        &education_regions::instruction::VoteOnRemoval { region_id, vote, amount }.data(),
+        &education_regions::instruction::VoteOnRemoval {
+            region_id,
+            vote,
+            amount,
+        }
+        .data(),
         education_regions::accounts::VoteOnRemoval {
             voter: *voter,
             config: regions_config(),
@@ -745,45 +838,6 @@ pub fn unlock_removal_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
             voter_token: token_acc(voter),
             vault: vault(),
             vote_record: removal_vote_pda(proposal_id, voter),
-            token_program: TOKEN_PROGRAM_ID,
-        }
-        .to_account_metas(None),
-    )
-}
-
-pub fn bid_replacement_ix(bidder: &Pubkey, region_id: u16, amount: u64, previous: Option<Pubkey>) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::BidOnReplacement { region_id, amount }.data(),
-        education_regions::accounts::BidOnReplacement {
-            bidder: *bidder,
-            config: regions_config(),
-            operator_role: role_pda(bidder, Role::RegionalOperator),
-            xcav_mint: xcav_mint(),
-            bidder_token: token_acc(bidder),
-            vault: vault(),
-            region: region_pda(region_id),
-            auction: replacement_auction_pda(region_id),
-            previous_bidder_token: previous.as_ref().map(token_acc),
-            token_program: TOKEN_PROGRAM_ID,
-            system_program: SYS,
-        }
-        .to_account_metas(None),
-    )
-}
-
-pub fn finalize_replacement_ix(cranker: &Pubkey, region_id: u16, old_owner: &Pubkey) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::FinalizeReplacement { region_id }.data(),
-        education_regions::accounts::FinalizeReplacement {
-            cranker: *cranker,
-            config: regions_config(),
-            xcav_mint: xcav_mint(),
-            vault: vault(),
-            region: region_pda(region_id),
-            auction: replacement_auction_pda(region_id),
-            old_owner_token: Some(token_acc(old_owner)),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),

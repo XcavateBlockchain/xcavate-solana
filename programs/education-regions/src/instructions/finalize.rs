@@ -7,9 +7,9 @@ use crate::state::{Config, RegionProposal, RegionState, RegionStatus};
 use crate::vault::release_from_vault;
 
 /// Finalize an expired proposal. Permissionless: anyone can crank it once the
-/// voting window closes. If it passed (threshold + quorum) the region moves to
-/// an auction and the proposer's deposit is returned; otherwise the deposit is
-/// slashed to the treasury and the region is marked rejected.
+/// voting window closes. If it passed (threshold + quorum) the region becomes
+/// claimable by the proposer, with their bond kept as the region's collateral.
+/// Otherwise the bond is returned in full and the region is marked rejected.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct FinalizeRegionProposal<'info> {
@@ -55,19 +55,15 @@ pub struct FinalizeRegionProposal<'info> {
     #[account(mut)]
     pub proposer: UncheckedAccount<'info>,
 
-    /// The proposer's XCAV account; receives the returned deposit on a pass.
-    /// Optional so a rejection (which slashes to the treasury) can still be
-    /// cranked when the proposer has closed their token account.
+    /// The proposer's XCAV account; receives the returned bond on a rejection.
+    /// Optional so a pass (which keeps the bond as collateral) can be cranked
+    /// without it.
     #[account(
         mut,
         token::mint = config.xcav_mint,
         token::authority = proposer,
     )]
     pub proposer_token: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
-
-    /// The configured treasury XCAV account; receives a slashed deposit.
-    #[account(mut, address = config.treasury @ RegionsError::InvalidTreasury)]
-    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
@@ -82,7 +78,10 @@ pub fn finalize_region_proposal_handler(
     );
 
     let now = Clock::get()?.unix_timestamp;
-    require!(now >= ctx.accounts.proposal.expiry, RegionsError::VotingStillOngoing);
+    require!(
+        now >= ctx.accounts.proposal.expiry,
+        RegionsError::VotingStillOngoing
+    );
 
     let proposal = &ctx.accounts.proposal;
     let yes = proposal.yes_power;
@@ -95,18 +94,34 @@ pub fn finalize_region_proposal_handler(
     let approval_base = yes.checked_add(no).ok_or(RegionsError::Overflow)?;
 
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
-    let meets_threshold = total != 0
-        && (yes as u128).saturating_mul(10_000) >= (approval_base as u128).saturating_mul(threshold_bps);
-    let meets_quorum = total > ctx.accounts.config.quorum;
+    // Passing requires real Yes support: abstains count toward quorum but not
+    // toward the approval ratio.
+    let meets_threshold = yes > 0
+        && (yes as u128).saturating_mul(10_000)
+            >= (approval_base as u128).saturating_mul(threshold_bps);
+    let meets_quorum = total >= ctx.accounts.config.quorum;
     let proposal_id = proposal.proposal_id;
-    let deposit = proposal.deposit;
-
-    let decimals = ctx.accounts.xcav_mint.decimals;
-    let config_bump = ctx.accounts.config.bump;
+    let deposit = ctx.accounts.region_state.deposit;
 
     if meets_threshold && meets_quorum {
-        // Passed: return the proposer's deposit and open the region for bidding.
-        // (The proposal account also closes, returning its rent to the proposer.)
+        // Passed: the region is now claimable by the proposer. The bond stays in
+        // the vault and becomes the region's collateral once claimed; if the
+        // proposer never claims, anyone can clear the state and refund them
+        // after the claim deadline. (The proposal account closes here, returning
+        // its rent to the proposer.)
+        let region_state = &mut ctx.accounts.region_state;
+        region_state.status = RegionStatus::Passed;
+        region_state.claim_deadline = now
+            .checked_add(ctx.accounts.config.owner_change_period)
+            .ok_or(RegionsError::Overflow)?;
+
+        emit!(RegionProposalPassed {
+            region_id,
+            proposal_id,
+        });
+    } else {
+        // Rejected: return the bond in full and mark the state rejected so the
+        // region can be proposed again once cleared.
         let proposer_token = ctx
             .accounts
             .proposer_token
@@ -118,69 +133,30 @@ pub fn finalize_region_proposal_handler(
             &ctx.accounts.xcav_mint.to_account_info(),
             &proposer_token.to_account_info(),
             &ctx.accounts.config.to_account_info(),
-            config_bump,
+            ctx.accounts.config.bump,
             deposit,
-            decimals,
-        )?;
-
-        // Reward the proposer with a deposit-matching payment from the
-        // treasury, skipped silently when the treasury cannot afford it.
-        let reward = if ctx.accounts.treasury.amount >= deposit {
-            release_from_vault(
-                &ctx.accounts.token_program.to_account_info(),
-                &ctx.accounts.treasury.to_account_info(),
-                &ctx.accounts.xcav_mint.to_account_info(),
-                &proposer_token.to_account_info(),
-                &ctx.accounts.config.to_account_info(),
-                config_bump,
-                deposit,
-                decimals,
-            )?;
-            deposit
-        } else {
-            0
-        };
-
-        let region_state = &mut ctx.accounts.region_state;
-        region_state.status = RegionStatus::Auctioning;
-        region_state.highest_bidder = None;
-        region_state.collateral = ctx.accounts.config.minimum_region_deposit;
-        region_state.auction_expiry = now
-            .checked_add(ctx.accounts.config.auction_period)
-            .ok_or(RegionsError::Overflow)?;
-
-        emit!(RegionAuctionStarted { region_id, proposal_id, reward });
-    } else {
-        // Rejected: slash the deposit to the treasury. (The proposal account
-        // still closes, returning its rent to the proposer.)
-        release_from_vault(
-            &ctx.accounts.token_program.to_account_info(),
-            &ctx.accounts.vault.to_account_info(),
-            &ctx.accounts.xcav_mint.to_account_info(),
-            &ctx.accounts.treasury.to_account_info(),
-            &ctx.accounts.config.to_account_info(),
-            config_bump,
-            deposit,
-            decimals,
+            ctx.accounts.xcav_mint.decimals,
         )?;
 
         ctx.accounts.region_state.status = RegionStatus::Rejected;
-        emit!(RegionProposalRejected { region_id, proposal_id, slashed: deposit });
+        emit!(RegionProposalRejected {
+            region_id,
+            proposal_id,
+            refunded: deposit,
+        });
     }
     Ok(())
 }
 
 #[event]
-pub struct RegionAuctionStarted {
+pub struct RegionProposalPassed {
     pub region_id: u16,
     pub proposal_id: u64,
-    /// The treasury reward paid to the proposer (zero if unaffordable).
-    pub reward: u64,
 }
 
 #[event]
 pub struct RegionProposalRejected {
     pub region_id: u16,
     pub proposal_id: u64,
-    pub slashed: u64,
+    pub refunded: u64,
 }

@@ -22,7 +22,12 @@ fn update_config_works() {
     let protocol = w.protocol.pubkey();
     let mut p = default_params();
     p.module_price = 250;
-    ok(&mut w.svm, update_config_ix(&auth.pubkey(), &protocol, p), &auth, &[&auth]);
+    ok(
+        &mut w.svm,
+        update_config_ix(&auth.pubkey(), &protocol, p),
+        &auth,
+        &[&auth],
+    );
     assert_eq!(config(&w.svm).module_price, 250);
 }
 
@@ -50,22 +55,46 @@ fn update_config_rejects_bad_params() {
     let mut p = default_params();
     p.content_creator_bps = 9_000;
     p.regional_operator_bps = 2_000;
-    err(&mut w.svm, update_config_ix(&auth.pubkey(), &protocol, p), &auth, &[&auth], "InvalidConfig");
+    err(
+        &mut w.svm,
+        update_config_ix(&auth.pubkey(), &protocol, p),
+        &auth,
+        &[&auth],
+        "InvalidConfig",
+    );
 
     // Approval threshold over 100%.
     let mut p = default_params();
     p.threshold_bps = 10_001;
-    err(&mut w.svm, update_config_ix(&auth.pubkey(), &protocol, p), &auth, &[&auth], "InvalidConfig");
+    err(
+        &mut w.svm,
+        update_config_ix(&auth.pubkey(), &protocol, p),
+        &auth,
+        &[&auth],
+        "InvalidConfig",
+    );
 
     // A non-positive window.
     let mut p = default_params();
     p.voting_period = 0;
-    err(&mut w.svm, update_config_ix(&auth.pubkey(), &protocol, p), &auth, &[&auth], "InvalidConfig");
+    err(
+        &mut w.svm,
+        update_config_ix(&auth.pubkey(), &protocol, p),
+        &auth,
+        &[&auth],
+        "InvalidConfig",
+    );
 
     // Zero base price.
     let mut p = default_params();
     p.module_price = 0;
-    err(&mut w.svm, update_config_ix(&auth.pubkey(), &protocol, p), &auth, &[&auth], "InvalidConfig");
+    err(
+        &mut w.svm,
+        update_config_ix(&auth.pubkey(), &protocol, p),
+        &auth,
+        &[&auth],
+        "InvalidConfig",
+    );
 }
 
 #[test]
@@ -75,7 +104,12 @@ fn update_authority_rotates() {
     let protocol = w.protocol.pubkey();
     let new_auth = actor(&mut w.svm);
 
-    ok(&mut w.svm, update_authority_ix(&auth.pubkey(), &new_auth.pubkey()), &auth, &[&auth]);
+    ok(
+        &mut w.svm,
+        update_authority_ix(&auth.pubkey(), &new_auth.pubkey()),
+        &auth,
+        &[&auth],
+    );
     assert_eq!(config(&w.svm).authority, new_auth.pubkey());
 
     // The old authority can no longer update config.
@@ -90,16 +124,23 @@ fn update_authority_rotates() {
     // The new authority can.
     let mut p = default_params();
     p.module_price = 300;
-    ok(&mut w.svm, update_config_ix(&new_auth.pubkey(), &protocol, p), &new_auth, &[&new_auth]);
+    ok(
+        &mut w.svm,
+        update_config_ix(&new_auth.pubkey(), &protocol, p),
+        &new_auth,
+        &[&new_auth],
+    );
     assert_eq!(config(&w.svm).module_price, 300);
 }
-
 
 #[test]
 fn init_requires_upgrade_authority() {
     let mut svm = LiteSVM::new();
-    svm.add_program(eid(), include_bytes!("../../../target/deploy/real_x_education.so"))
-        .unwrap();
+    svm.add_program(
+        eid(),
+        include_bytes!("../../../target/deploy/real_x_education.so"),
+    )
+    .unwrap();
     set_mint(&mut svm, xcav_mint());
     set_treasury(&mut svm);
     let deployer = funded(&mut svm);
@@ -129,7 +170,10 @@ fn update_config_rejects_foreign_treasury() {
     give(&mut w.svm, &xcav_mint(), &auth.pubkey(), 0);
     let ix = anchor_lang::solana_program::instruction::Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::UpdateConfig { params: default_params() }.data(),
+        &real_x_education::instruction::UpdateConfig {
+            params: default_params(),
+        }
+        .data(),
         real_x_education::accounts::UpdateConfig {
             authority: auth.pubkey(),
             config: config_pda(),

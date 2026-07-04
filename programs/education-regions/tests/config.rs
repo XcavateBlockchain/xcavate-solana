@@ -10,8 +10,11 @@ use anchor_spl::token::spl_token::state::Account as SplAccount;
 #[test]
 fn init_rejects_bad_threshold() {
     let mut svm = LiteSVM::new();
-    svm.add_program(rid(), include_bytes!("../../../target/deploy/education_regions.so"))
-        .unwrap();
+    svm.add_program(
+        rid(),
+        include_bytes!("../../../target/deploy/education_regions.so"),
+    )
+    .unwrap();
     set_mint(&mut svm);
     let authority = funded(&mut svm);
     bind_upgrade_authority(&mut svm, &rid(), &authority.pubkey());
@@ -40,7 +43,9 @@ fn init_creates_program_treasury() {
     assert_eq!(token.owner, regions_config());
     assert_eq!(token.amount, 0);
 
-    let cfg = RegionsConfig::try_deserialize(&mut &svm.get_account(&regions_config()).unwrap().data[..]).unwrap();
+    let cfg =
+        RegionsConfig::try_deserialize(&mut &svm.get_account(&regions_config()).unwrap().data[..])
+            .unwrap();
     assert_eq!(cfg.treasury, treasury_pda());
 }
 
@@ -50,12 +55,16 @@ fn update_config_by_authority_works() {
 
     let mut params = default_params();
     params.minimum_voting_amount = 250_000_000;
-    ok(&mut svm, update_config_ix(&authority.pubkey(), params), &authority, &[&authority]);
+    ok(
+        &mut svm,
+        update_config_ix(&authority.pubkey(), params),
+        &authority,
+        &[&authority],
+    );
 
-    let cfg = RegionsConfig::try_deserialize(
-        &mut &svm.get_account(&regions_config()).unwrap().data[..],
-    )
-    .unwrap();
+    let cfg =
+        RegionsConfig::try_deserialize(&mut &svm.get_account(&regions_config()).unwrap().data[..])
+            .unwrap();
     assert_eq!(cfg.minimum_voting_amount, 250_000_000);
 }
 
@@ -117,8 +126,11 @@ fn update_authority_rotates() {
 #[test]
 fn init_requires_upgrade_authority() {
     let mut svm = LiteSVM::new();
-    svm.add_program(rid(), include_bytes!("../../../target/deploy/education_regions.so"))
-        .unwrap();
+    svm.add_program(
+        rid(),
+        include_bytes!("../../../target/deploy/education_regions.so"),
+    )
+    .unwrap();
     set_mint(&mut svm);
     let deployer = funded(&mut svm);
     bind_upgrade_authority(&mut svm, &rid(), &deployer.pubkey());
@@ -126,7 +138,13 @@ fn init_requires_upgrade_authority() {
     // Someone other than the deployer cannot claim the config.
     let imposter = funded(&mut svm);
     give_xcav(&mut svm, &imposter.pubkey(), 0);
-    fails_with(&mut svm, regions_init_ix(&imposter.pubkey()), &imposter, &[&imposter], "NotUpgradeAuthority");
+    fails_with(
+        &mut svm,
+        regions_init_ix(&imposter.pubkey()),
+        &imposter,
+        &[&imposter],
+        "NotUpgradeAuthority",
+    );
 }
 
 #[test]

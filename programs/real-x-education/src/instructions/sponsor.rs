@@ -174,17 +174,10 @@ pub struct ReclaimSponsorship<'info> {
     )]
     pub module: Box<Account<'info, Module>>,
 
-    #[account(
-        seeds = [
-            xcavate_roles::ROLE_SEED,
-            sponsor.key().as_ref(),
-            &[Role::ModuleSponsor.seed_byte()],
-        ],
-        bump = sponsor_role.bump,
-        seeds::program = xcavate_roles::ID,
-    )]
-    pub sponsor_role: Box<Account<'info, RoleAccount>>,
-
+    // Gated by ownership, not by an active ModuleSponsor role: the
+    // `sponsorship.sponsor` constraint below already restricts this to the
+    // sponsor who funded it, which is all that's needed to refund their own
+    // unbooked escrow.
     #[account(
         mut,
         seeds = [SPONSORSHIP_SEED, &module_id.to_le_bytes(), &sponsor_id.to_le_bytes()],

@@ -2,8 +2,8 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
 use crate::constants::{
-    BOOKING_SEED, BOOK_ESCROW_SEED, CONFIG_SEED, MODULE_SEED, SPONSORSHIP_SEED, SPONSOR_ESCROW_SEED,
-    VAULT_SEED,
+    BOOKING_SEED, BOOK_ESCROW_SEED, CONFIG_SEED, MODULE_SEED, SPONSORSHIP_SEED,
+    SPONSOR_ESCROW_SEED, VAULT_SEED,
 };
 use crate::error::EducationError;
 use crate::state::{Booking, Config, Module, Sponsorship};
@@ -108,6 +108,7 @@ pub fn book_module_handler(
     ctx: Context<BookModule>,
     module_id: u64,
     sponsor_id: u64,
+    delivery_at: i64,
     metadata: String,
 ) -> Result<()> {
     require!(
@@ -124,6 +125,12 @@ pub fn book_module_handler(
     );
 
     let clock = Clock::get()?;
+    // The scheduled delivery must be a present-or-future time, since scoring and
+    // no-show expiry both key off it.
+    require!(
+        delivery_at >= clock.unix_timestamp,
+        EducationError::DeliveryNotReached
+    );
     let booking_id = ctx.accounts.config.next_booking_id;
     let deposit = ctx.accounts.config.booking_deposit;
     let per_token = ctx.accounts.sponsorship.price_per_token;
@@ -190,6 +197,7 @@ pub fn book_module_handler(
     booking.score = None;
     booking.deposit = deposit;
     booking.booked_at = clock.unix_timestamp;
+    booking.delivery_at = delivery_at;
     booking.claimed_at = None;
     booking.metadata = metadata;
     booking.bump = ctx.bumps.booking;
@@ -216,17 +224,9 @@ pub struct FinishBooking<'info> {
     #[account(mut)]
     pub school: Signer<'info>,
 
-    #[account(
-        seeds = [
-            xcavate_roles::ROLE_SEED,
-            school.key().as_ref(),
-            &[Role::ModuleBooker.seed_byte()],
-        ],
-        bump = school_role.bump,
-        seeds::program = xcavate_roles::ID,
-    )]
-    pub school_role: Box<Account<'info, RoleAccount>>,
-
+    // Gated by ownership, not by an active ModuleBooker role: the `booking.school`
+    // constraint below already restricts this to the booking's own school, which
+    // is all that's needed to release its deposit and settle the sponsorship.
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
 
@@ -308,15 +308,21 @@ pub fn finish_booking_handler(
         ctx.accounts.xcav_mint.decimals,
     )?;
 
-    // The escrow was emptied by the payout, so its rent can go back to the
-    // school along with the closed booking record.
-    close_vault_account(
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.booking_escrow.to_account_info(),
-        &ctx.accounts.school.to_account_info(),
-        &ctx.accounts.config.to_account_info(),
-        ctx.accounts.config.bump,
-    )?;
+    // The escrow was drained by the payout, so close it to return its rent to the
+    // school alongside the closed booking record, but only if it is actually
+    // empty. A stray transfer into the account after settlement would make the SPL
+    // close fail and revert the whole instruction, so any residual balance leaves
+    // the escrow behind while the deposit release still stands.
+    ctx.accounts.booking_escrow.reload()?;
+    if ctx.accounts.booking_escrow.amount == 0 {
+        close_vault_account(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.booking_escrow.to_account_info(),
+            &ctx.accounts.school.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            ctx.accounts.config.bump,
+        )?;
+    }
 
     emit!(BookingFinished {
         module_id: ctx.accounts.booking.module_id,

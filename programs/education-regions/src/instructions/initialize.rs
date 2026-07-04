@@ -10,11 +10,8 @@ use crate::state::Config;
 /// that isn't an XCAV token account.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone)]
 pub struct ConfigParams {
-    pub proposal_deposit: u64,
     pub minimum_voting_amount: u64,
-    pub minimum_region_deposit: u64,
     pub voting_period: i64,
-    pub auction_period: i64,
     pub owner_change_period: i64,
     pub threshold_bps: u16,
     pub quorum: u64,
@@ -36,14 +33,10 @@ impl ConfigParams {
         );
         require!(self.quorum > 0, RegionsError::InvalidConfig);
         require!(
-            self.voting_period > 0 && self.auction_period > 0 && self.owner_change_period > 0,
+            self.voting_period > 0 && self.owner_change_period > 0,
             RegionsError::InvalidConfig
         );
-        require!(
-            self.minimum_voting_amount > 0 && self.minimum_region_deposit > 0,
-            RegionsError::InvalidConfig
-        );
-        require!(self.proposal_deposit > 0, RegionsError::InvalidConfig);
+        require!(self.minimum_voting_amount > 0, RegionsError::InvalidConfig);
         require!(
             self.removal_deposit > 0 && self.slash_amount > 0,
             RegionsError::InvalidConfig
@@ -57,11 +50,8 @@ impl ConfigParams {
     }
 
     fn apply(&self, config: &mut Config) {
-        config.proposal_deposit = self.proposal_deposit;
         config.minimum_voting_amount = self.minimum_voting_amount;
-        config.minimum_region_deposit = self.minimum_region_deposit;
         config.voting_period = self.voting_period;
-        config.auction_period = self.auction_period;
         config.owner_change_period = self.owner_change_period;
         config.threshold_bps = self.threshold_bps;
         config.quorum = self.quorum;
@@ -171,7 +161,9 @@ pub fn update_config_handler(ctx: Context<UpdateConfig>, params: ConfigParams) -
     let config = &mut ctx.accounts.config;
     params.apply(config);
 
-    emit!(ConfigUpdated { treasury: config.treasury });
+    emit!(ConfigUpdated {
+        treasury: config.treasury
+    });
     Ok(())
 }
 
@@ -214,7 +206,10 @@ pub fn withdraw_treasury_handler(ctx: Context<WithdrawTreasury>, amount: u64) ->
         ctx.accounts.xcav_mint.decimals,
     )?;
 
-    emit!(TreasuryWithdrawn { destination: ctx.accounts.destination.key(), amount });
+    emit!(TreasuryWithdrawn {
+        destination: ctx.accounts.destination.key(),
+        amount
+    });
     Ok(())
 }
 
@@ -237,12 +232,18 @@ pub fn update_authority_handler(
     ctx: Context<UpdateAuthority>,
     new_authority: Pubkey,
 ) -> Result<()> {
-    require!(new_authority != Pubkey::default(), RegionsError::InvalidConfig);
+    require!(
+        new_authority != Pubkey::default(),
+        RegionsError::InvalidConfig
+    );
     let config = &mut ctx.accounts.config;
     let old_authority = config.authority;
     config.authority = new_authority;
 
-    emit!(AuthorityUpdated { old_authority, new_authority });
+    emit!(AuthorityUpdated {
+        old_authority,
+        new_authority
+    });
     Ok(())
 }
 

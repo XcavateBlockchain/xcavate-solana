@@ -37,7 +37,9 @@ pub fn handler(ctx: Context<InitializeConfig>) -> Result<()> {
     config.authority = ctx.accounts.authority.key();
     config.bump = ctx.bumps.config;
 
-    emit!(ConfigInitialized { authority: config.authority });
+    emit!(ConfigInitialized {
+        authority: config.authority
+    });
     Ok(())
 }
 
@@ -60,12 +62,18 @@ pub fn update_authority_handler(
     ctx: Context<UpdateAuthority>,
     new_authority: Pubkey,
 ) -> Result<()> {
-    require!(new_authority != Pubkey::default(), RolesError::InvalidAuthority);
+    require!(
+        new_authority != Pubkey::default(),
+        RolesError::InvalidAuthority
+    );
     let config = &mut ctx.accounts.config;
     let old_authority = config.authority;
     config.authority = new_authority;
 
-    emit!(AuthorityUpdated { old_authority, new_authority });
+    emit!(AuthorityUpdated {
+        old_authority,
+        new_authority
+    });
     Ok(())
 }
 

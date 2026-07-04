@@ -81,7 +81,10 @@ pub fn vote_on_region_proposal_handler(
     );
 
     let now = Clock::get()?.unix_timestamp;
-    require!(now < ctx.accounts.proposal.expiry, RegionsError::ProposalExpired);
+    require!(
+        now < ctx.accounts.proposal.expiry,
+        RegionsError::ProposalExpired
+    );
 
     let decimals = ctx.accounts.xcav_mint.decimals;
     let config_bump = ctx.accounts.config.bump;

@@ -7,7 +7,10 @@ use common::*;
 /// Read a region's open removal proposal.
 fn removal_of(svm: &LiteSVM, region_id: u16) -> education_regions::state::RemovalProposal {
     education_regions::state::RemovalProposal::try_deserialize(
-        &mut &svm.get_account(&removal_proposal_pda(region_id)).unwrap().data[..],
+        &mut &svm
+            .get_account(&removal_proposal_pda(region_id))
+            .unwrap()
+            .data[..],
     )
     .unwrap()
 }
@@ -20,10 +23,20 @@ fn removal_upheld_slashes_collateral_and_adds_strike() {
     let challenger = new_operator(&mut svm, &authority);
     let chal_before = xcav_balance(&svm, &challenger.pubkey());
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     let voter = actor(&mut svm);
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
 
     warp(&mut svm, 2_000);
     let cranker = funded(&mut svm);
@@ -37,12 +50,14 @@ fn removal_upheld_slashes_collateral_and_adds_strike() {
     let region = region_of(&svm, 1);
     // One strike, collateral down by slash_amount (100M), seat not yet open (1 < 3).
     assert_eq!(region.active_strikes, 1);
-    assert_eq!(region.collateral, 600_000_000 - 100_000_000);
+    assert_eq!(region.collateral, DEPOSIT - 100_000_000);
     // Treasury received the slash; challenger's deposit was returned.
     assert_eq!(treasury_balance(&svm), 100_000_000);
     assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before);
     // Removal proposal closed.
-    assert!(svm.get_account(&removal_proposal_pda(1)).map_or(true, |a| a.data.is_empty()));
+    assert!(svm
+        .get_account(&removal_proposal_pda(1))
+        .map_or(true, |a| a.data.is_empty()));
 }
 
 #[test]
@@ -53,10 +68,20 @@ fn removal_rejected_slashes_proposer() {
     let challenger = new_operator(&mut svm, &authority);
     let chal_before = xcav_balance(&svm, &challenger.pubkey());
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     let voter = actor(&mut svm);
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::No, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::No, 200_000_000),
+        &voter,
+        &[&voter],
+    );
 
     warp(&mut svm, 2_000);
     let cranker = funded(&mut svm);
@@ -70,8 +95,11 @@ fn removal_rejected_slashes_proposer() {
     let region = region_of(&svm, 1);
     // Operator untouched; challenger's deposit slashed to the treasury.
     assert_eq!(region.active_strikes, 0);
-    assert_eq!(region.collateral, 600_000_000);
-    assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before - DEPOSIT);
+    assert_eq!(region.collateral, DEPOSIT);
+    assert_eq!(
+        xcav_balance(&svm, &challenger.pubkey()),
+        chal_before - DEPOSIT
+    );
     assert_eq!(treasury_balance(&svm), DEPOSIT);
 }
 
@@ -84,9 +112,19 @@ fn removal_reaching_ceiling_opens_seat() {
     for _ in 0..3 {
         let challenger = new_operator(&mut svm, &authority);
         let id = next_proposal_id(&svm);
-        ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+        ok(
+            &mut svm,
+            propose_remove_ix(&challenger.pubkey(), 1),
+            &challenger,
+            &[&challenger],
+        );
         let voter = actor(&mut svm);
-        ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+        ok(
+            &mut svm,
+            vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+            &voter,
+            &[&voter],
+        );
         warp(&mut svm, 2_000);
         let cranker = funded(&mut svm);
         ok(
@@ -111,15 +149,30 @@ fn unlock_removal_vote_works() {
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     let voter = actor(&mut svm);
     let before = xcav_balance(&svm, &voter.pubkey());
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
     assert_eq!(xcav_balance(&svm, &voter.pubkey()), before - 200_000_000);
 
     warp(&mut svm, 2_000);
-    ok(&mut svm, unlock_removal_ix(&voter.pubkey(), id), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        unlock_removal_ix(&voter.pubkey(), id),
+        &voter,
+        &[&voter],
+    );
     assert_eq!(xcav_balance(&svm, &voter.pubkey()), before);
 }
 
@@ -130,7 +183,12 @@ fn vote_removal_below_minimum_fails() {
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     let voter = actor(&mut svm);
     fails_with(
@@ -149,7 +207,12 @@ fn vote_removal_after_expiry_fails() {
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     warp(&mut svm, 2_000); // past removal_voting_period (1_000)
     let voter = actor(&mut svm);
@@ -169,9 +232,19 @@ fn finalize_removal_fails_while_voting_ongoing() {
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
     let voter = actor(&mut svm);
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
 
     let cranker = funded(&mut svm);
     fails_with(
@@ -190,9 +263,19 @@ fn unlock_removal_fails_while_voting_ongoing() {
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
     let voter = actor(&mut svm);
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
 
     fails_with(
         &mut svm,
@@ -208,16 +291,31 @@ fn removal_slash_capped_at_collateral() {
     let (mut svm, operator, authority) = setup();
     // A strike slash larger than the whole collateral must cap at the collateral.
     let mut params = default_params();
-    params.slash_amount = 700_000_000; // > the 600M collateral below
-    ok(&mut svm, update_config_ix(&authority.pubkey(), params), &authority, &[&authority]);
+    params.slash_amount = 2 * DEPOSIT; // > the DEPOSIT collateral below
+    ok(
+        &mut svm,
+        update_config_ix(&authority.pubkey(), params),
+        &authority,
+        &[&authority],
+    );
 
-    reach_created(&mut svm, &operator, &authority); // collateral 600M
+    reach_created(&mut svm, &operator, &authority); // collateral DEPOSIT
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
     let voter = actor(&mut svm);
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
     warp(&mut svm, 2_000);
     let cranker = funded(&mut svm);
     ok(
@@ -227,9 +325,9 @@ fn removal_slash_capped_at_collateral() {
         &[&cranker],
     );
 
-    // Collateral floors at zero; only the 600M that existed is slashed, not 700M.
+    // Collateral floors at zero; only the DEPOSIT that existed is slashed, not 2*DEPOSIT.
     assert_eq!(region_of(&svm, 1).collateral, 0);
-    assert_eq!(treasury_balance(&svm), 600_000_000);
+    assert_eq!(treasury_balance(&svm), DEPOSIT);
 }
 
 #[test]
@@ -239,19 +337,37 @@ fn revote_removal_replaces_previous() {
 
     let challenger = new_operator(&mut svm, &authority);
     let id = next_proposal_id(&svm);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     let voter = actor(&mut svm);
     let voter_before = xcav_balance(&svm, &voter.pubkey());
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::Yes, 200_000_000),
+        &voter,
+        &[&voter],
+    );
     // Switch to No with a larger amount; the prior yes lock is refunded.
-    ok(&mut svm, vote_removal_ix(&voter.pubkey(), 1, id, Vote::No, 300_000_000), &voter, &[&voter]);
+    ok(
+        &mut svm,
+        vote_removal_ix(&voter.pubkey(), 1, id, Vote::No, 300_000_000),
+        &voter,
+        &[&voter],
+    );
 
     let rp = removal_of(&svm, 1);
     assert_eq!(rp.yes_power, 0);
     assert_eq!(rp.no_power, 300_000_000);
     // Only the latest vote stays locked.
-    assert_eq!(voter_before - xcav_balance(&svm, &voter.pubkey()), 300_000_000);
+    assert_eq!(
+        voter_before - xcav_balance(&svm, &voter.pubkey()),
+        300_000_000
+    );
 }
 
 #[test]
@@ -261,7 +377,12 @@ fn removal_rejected_on_quorum_not_met() {
 
     let challenger = new_operator(&mut svm, &authority);
     let chal_before = xcav_balance(&svm, &challenger.pubkey());
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
 
     // No votes at all: quorum is not met, so the removal is rejected and the
     // proposer's deposit is slashed.
@@ -276,8 +397,11 @@ fn removal_rejected_on_quorum_not_met() {
 
     let region = region_of(&svm, 1);
     assert_eq!(region.active_strikes, 0);
-    assert_eq!(region.collateral, 600_000_000);
-    assert_eq!(xcav_balance(&svm, &challenger.pubkey()), chal_before - DEPOSIT);
+    assert_eq!(region.collateral, DEPOSIT);
+    assert_eq!(
+        xcav_balance(&svm, &challenger.pubkey()),
+        chal_before - DEPOSIT
+    );
     assert_eq!(treasury_balance(&svm), DEPOSIT);
 }
 
@@ -287,7 +411,12 @@ fn propose_remove_fails_when_already_ongoing() {
     reach_created(&mut svm, &operator, &authority);
 
     let challenger = new_operator(&mut svm, &authority);
-    ok(&mut svm, propose_remove_ix(&challenger.pubkey(), 1), &challenger, &[&challenger]);
+    ok(
+        &mut svm,
+        propose_remove_ix(&challenger.pubkey(), 1),
+        &challenger,
+        &[&challenger],
+    );
     // A second removal proposal for the same region hits the existing PDA.
     let other = new_operator(&mut svm, &authority);
     fails_with(
@@ -310,5 +439,60 @@ fn propose_remove_fails_for_unknown_region() {
         &challenger,
         &[&challenger],
         "AccountNotInitialized",
+    );
+}
+
+// If the region's operator changes while a removal vote is in flight, finalizing
+// the removal must not punish the innocent successor: it is voided and the
+// proposer's deposit refunded.
+#[test]
+fn removal_voided_when_owner_changed() {
+    let (mut svm, operator, authority) = setup();
+    reach_created(&mut svm, &operator, &authority);
+
+    // Open a removal against the current operator.
+    let proposer = actor(&mut svm);
+    ok(
+        &mut svm,
+        propose_remove_ix(&proposer.pubkey(), 1),
+        &proposer,
+        &[&proposer],
+    );
+
+    // The operator resigns and a different operator claims the open seat before
+    // the removal is finalized.
+    ok(
+        &mut svm,
+        resign_ix(&operator.pubkey(), 1),
+        &operator,
+        &[&operator],
+    );
+    warp(&mut svm, 6_000); // past the notice period (and the removal window)
+    let newop = new_operator(&mut svm, &authority);
+    ok(
+        &mut svm,
+        claim_open_region_ix(&newop.pubkey(), 1, &operator.pubkey()),
+        &newop,
+        &[&newop],
+    );
+
+    // Finalizing the removal voids it: the new owner keeps their collateral and
+    // strikes, and the proposer's deposit is returned.
+    let proposer_before = xcav_balance(&svm, &proposer.pubkey());
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_removal_ix(&cranker.pubkey(), 1, &proposer.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    let region = region_of(&svm, 1);
+    assert_eq!(region.owner, newop.pubkey());
+    assert_eq!(region.active_strikes, 0);
+    assert_eq!(region.collateral, DEPOSIT);
+    assert_eq!(
+        xcav_balance(&svm, &proposer.pubkey()) - proposer_before,
+        DEPOSIT
     );
 }

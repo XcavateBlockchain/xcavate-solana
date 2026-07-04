@@ -1,8 +1,8 @@
 pub mod constants;
 pub mod error;
 pub mod instructions;
-pub mod state;
 pub mod mint_guard;
+pub mod state;
 pub mod vault;
 
 use anchor_lang::prelude::*;
@@ -13,9 +13,11 @@ pub use state::*;
 
 declare_id!("HnXYYBRgi453sKjjKwDpbMjJZxKvUEn4KPtPgnLKGkz7");
 
-/// Region governance: regional operators propose regions, holders vote, and the
-/// winning bidder becomes the region's operator. Education modules are scoped to
-/// regions and pay out to the region's operator.
+/// Region governance: a regional operator proposes a region by bonding XCAV,
+/// holders vote, and on a pass the proposer claims it and becomes the operator.
+/// Seats turn over by resignation or removal, after which any operator can claim
+/// the open region by bonding. Education modules are scoped to regions and pay
+/// out to the region's operator.
 #[program]
 pub mod education_regions {
     use super::*;
@@ -40,7 +42,7 @@ pub mod education_regions {
         initialize::withdraw_treasury_handler(ctx, amount)
     }
 
-    /// Propose a new region. RegionalOperator-only; locks a deposit.
+    /// Propose a new region. RegionalOperator-only; bonds 0.1% of XCAV supply.
     pub fn propose_new_region(ctx: Context<ProposeNewRegion>, region_id: u16) -> Result<()> {
         propose::propose_new_region_handler(ctx, region_id)
     }
@@ -63,17 +65,18 @@ pub mod education_regions {
         finalize::finalize_region_proposal_handler(ctx, region_id)
     }
 
-    /// Bid to operate a region whose proposal passed. RegionalOperator-only.
-    pub fn bid_on_region(ctx: Context<BidOnRegion>, region_id: u16, amount: u64) -> Result<()> {
-        auction::bid_on_region_handler(ctx, region_id, amount)
+    /// Claim a region whose proposal passed, creating it. Proposer-only.
+    pub fn create_region(ctx: Context<CreateRegion>, region_id: u16) -> Result<()> {
+        create::create_region_handler(ctx, region_id)
     }
 
-    /// Create the region once its auction ends; callable by the winner.
-    pub fn create_new_region(ctx: Context<CreateNewRegion>, region_id: u16) -> Result<()> {
-        auction::create_new_region_handler(ctx, region_id)
+    /// Claim an existing region whose seat is open, bonding 0.1% of XCAV supply.
+    /// First-come; RegionalOperator-only.
+    pub fn claim_open_region(ctx: Context<ClaimOpenRegion>, region_id: u16) -> Result<()> {
+        create::claim_open_region_handler(ctx, region_id)
     }
 
-    /// Reclaim locked voting SOL after a proposal's voting window ends.
+    /// Reclaim locked voting XCAV after a proposal's voting window ends.
     pub fn unlock_voting_token(ctx: Context<UnlockVotingToken>, proposal_id: u64) -> Result<()> {
         cleanup::unlock_voting_token_handler(ctx, proposal_id)
     }
@@ -111,22 +114,8 @@ pub mod education_regions {
         removal::unlock_removal_vote_handler(ctx, proposal_id)
     }
 
-    /// Bid to take over a region whose operator seat is open. RegionalOperator-only.
-    pub fn bid_on_replacement(
-        ctx: Context<BidOnReplacement>,
-        region_id: u16,
-        amount: u64,
-    ) -> Result<()> {
-        replacement::bid_on_replacement_handler(ctx, region_id, amount)
-    }
-
-    /// Finalize a replacement auction once it ends (permissionless crank).
-    pub fn finalize_replacement(ctx: Context<FinalizeReplacement>, region_id: u16) -> Result<()> {
-        replacement::finalize_replacement_handler(ctx, region_id)
-    }
-
     /// Schedule the caller's own departure as a region's operator.
     pub fn initiate_resignation(ctx: Context<InitiateResignation>, region_id: u16) -> Result<()> {
-        replacement::initiate_resignation_handler(ctx, region_id)
+        create::initiate_resignation_handler(ctx, region_id)
     }
 }

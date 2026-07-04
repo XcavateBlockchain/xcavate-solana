@@ -51,9 +51,15 @@ pub struct UnlockVotingToken<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn unlock_voting_token_handler(ctx: Context<UnlockVotingToken>, _proposal_id: u64) -> Result<()> {
+pub fn unlock_voting_token_handler(
+    ctx: Context<UnlockVotingToken>,
+    _proposal_id: u64,
+) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    require!(now >= ctx.accounts.vote_record.expiry, RegionsError::VotingStillOngoing);
+    require!(
+        now >= ctx.accounts.vote_record.expiry,
+        RegionsError::VotingStillOngoing
+    );
 
     let power = ctx.accounts.vote_record.power;
     if power > 0 {
@@ -79,13 +85,31 @@ pub fn unlock_voting_token_handler(ctx: Context<UnlockVotingToken>, _proposal_id
 }
 
 /// Close a region state that can no longer progress so the region can be
-/// proposed again: either a rejected proposal, or an auction that ended with no
-/// bids. Permissionless; the caller reclaims the rent as a cleanup incentive.
+/// proposed again: either a rejected proposal, or a passed proposal the proposer
+/// never claimed before the deadline (whose bond is refunded here). Permissionless;
+/// the caller reclaims the state's rent as a cleanup incentive.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct ClearRegionState<'info> {
     #[account(mut)]
     pub cranker: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    /// The XCAV mint (for `transfer_checked`).
+    #[account(address = config.xcav_mint @ RegionsError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// The protocol's XCAV escrow vault.
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -93,21 +117,53 @@ pub struct ClearRegionState<'info> {
         seeds = [REGION_STATE_SEED, &region_id.to_le_bytes()],
         bump = region_state.bump,
     )]
-    pub region_state: Account<'info, RegionState>,
+    pub region_state: Box<Account<'info, RegionState>>,
+
+    /// The proposer's XCAV account; receives the refunded bond when clearing a
+    /// stale passed state. Optional so a rejected state (whose bond was already
+    /// returned at finalize) can be cleared without it.
+    #[account(
+        mut,
+        token::mint = config.xcav_mint,
+        token::authority = region_state.proposer,
+    )]
+    pub proposer_token: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 pub fn clear_region_state_handler(ctx: Context<ClearRegionState>, _region_id: u16) -> Result<()> {
-    let rs = &ctx.accounts.region_state;
     let now = Clock::get()?.unix_timestamp;
+    let status = ctx.accounts.region_state.status;
 
-    let clearable = rs.status == RegionStatus::Rejected
-        || (rs.status == RegionStatus::Auctioning
-            && rs.highest_bidder.is_none()
-            && now >= rs.auction_expiry);
+    let clearable = status == RegionStatus::Rejected
+        || (status == RegionStatus::Passed && now >= ctx.accounts.region_state.claim_deadline);
     require!(clearable, RegionsError::NotClearable);
 
-    emit!(RegionStateCleared { region_id: rs.region_id, status: rs.status });
-    // `close = cranker` returns the rent.
+    // A passed state still holds the proposer's bond in the vault; refund it.
+    if status == RegionStatus::Passed {
+        let proposer_token = ctx
+            .accounts
+            .proposer_token
+            .as_ref()
+            .ok_or(RegionsError::MissingRecipientToken)?;
+        release_from_vault(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.xcav_mint.to_account_info(),
+            &proposer_token.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            ctx.accounts.config.bump,
+            ctx.accounts.region_state.deposit,
+            ctx.accounts.xcav_mint.decimals,
+        )?;
+    }
+
+    emit!(RegionStateCleared {
+        region_id: ctx.accounts.region_state.region_id,
+        status,
+    });
+    // `close = cranker` returns the state's rent.
     Ok(())
 }
 

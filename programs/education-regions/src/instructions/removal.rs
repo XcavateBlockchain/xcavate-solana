@@ -87,6 +87,7 @@ pub fn propose_remove_operator_handler(
     proposal.proposal_id = proposal_id;
     proposal.region_id = region_id;
     proposal.proposer = ctx.accounts.proposer.key();
+    proposal.target_owner = ctx.accounts.region.owner;
     proposal.created_at = clock.unix_timestamp;
     proposal.expiry = expiry;
     proposal.deposit = deposit;
@@ -175,7 +176,10 @@ pub fn vote_on_removal_handler(
     );
 
     let now = Clock::get()?.unix_timestamp;
-    require!(now < ctx.accounts.removal_proposal.expiry, RegionsError::ProposalExpired);
+    require!(
+        now < ctx.accounts.removal_proposal.expiry,
+        RegionsError::ProposalExpired
+    );
 
     let decimals = ctx.accounts.xcav_mint.decimals;
     let config_bump = ctx.accounts.config.bump;
@@ -233,11 +237,12 @@ pub fn vote_on_removal_handler(
     Ok(())
 }
 
-/// Finalize an expired removal proposal. Permissionless crank. If it passed
-/// (threshold + quorum) the region's operator is slashed a strike worth of
-/// collateral and, once enough strikes accrue, the seat is opened for a
-/// replacement auction; the proposer's deposit is returned. Otherwise the
-/// proposer's deposit is slashed to the treasury.
+/// Finalize an expired removal proposal. Permissionless crank. If the operator
+/// it targeted is still in the seat and it passed (threshold + quorum), that
+/// operator is slashed a strike's worth of collateral and, once enough strikes
+/// accrue, the seat is opened for another operator to claim; the proposer's
+/// deposit is returned. If it failed the deposit is slashed to the treasury; if
+/// the operator already changed the removal is voided and the deposit returned.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct FinalizeRemoval<'info> {
@@ -317,16 +322,43 @@ pub fn finalize_removal_handler(ctx: Context<FinalizeRemoval>, region_id: u16) -
     let approval_base = yes.checked_add(no).ok_or(RegionsError::Overflow)?;
 
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
-    let meets_threshold = total != 0
-        && (yes as u128).saturating_mul(10_000) >= (approval_base as u128).saturating_mul(threshold_bps);
-    let meets_quorum = total > ctx.accounts.config.quorum;
+    // Passing requires real Yes support: abstains count toward quorum but not
+    // toward the approval ratio.
+    let meets_threshold = yes > 0
+        && (yes as u128).saturating_mul(10_000)
+            >= (approval_base as u128).saturating_mul(threshold_bps);
+    let meets_quorum = total >= ctx.accounts.config.quorum;
     let proposal_id = proposal.proposal_id;
     let deposit = proposal.deposit;
+    // The removal only stands if it still targets the current operator.
+    let target_changed = ctx.accounts.region.owner != proposal.target_owner;
 
     let decimals = ctx.accounts.xcav_mint.decimals;
     let config_bump = ctx.accounts.config.bump;
 
-    if meets_threshold && meets_quorum {
+    if target_changed {
+        // The challenged operator resigned or was already replaced, so this
+        // removal is moot: refund the proposer's deposit and slash nothing.
+        let proposer_token = ctx
+            .accounts
+            .proposer_token
+            .as_ref()
+            .ok_or(RegionsError::MissingRecipientToken)?;
+        release_from_vault(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.xcav_mint.to_account_info(),
+            &proposer_token.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            config_bump,
+            deposit,
+            decimals,
+        )?;
+        emit!(RemovalVoided {
+            region_id,
+            proposal_id,
+        });
+    } else if meets_threshold && meets_quorum {
         // Slash a strike's worth of the operator's collateral to the treasury.
         let slash = ctx
             .accounts
@@ -394,7 +426,11 @@ pub fn finalize_removal_handler(ctx: Context<FinalizeRemoval>, region_id: u16) -
             decimals,
         )?;
 
-        emit!(RemoveOperatorRejected { region_id, proposal_id, slashed: deposit });
+        emit!(RemoveOperatorRejected {
+            region_id,
+            proposal_id,
+            slashed: deposit
+        });
     }
     Ok(())
 }
@@ -444,9 +480,15 @@ pub struct UnlockRemovalVote<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
-pub fn unlock_removal_vote_handler(ctx: Context<UnlockRemovalVote>, _proposal_id: u64) -> Result<()> {
+pub fn unlock_removal_vote_handler(
+    ctx: Context<UnlockRemovalVote>,
+    _proposal_id: u64,
+) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
-    require!(now >= ctx.accounts.vote_record.expiry, RegionsError::VotingStillOngoing);
+    require!(
+        now >= ctx.accounts.vote_record.expiry,
+        RegionsError::VotingStillOngoing
+    );
 
     let power = ctx.accounts.vote_record.power;
     if power > 0 {
@@ -521,6 +563,12 @@ pub struct RemoveOperatorRejected {
     pub region_id: u16,
     pub proposal_id: u64,
     pub slashed: u64,
+}
+
+#[event]
+pub struct RemovalVoided {
+    pub region_id: u16,
+    pub proposal_id: u64,
 }
 
 #[event]

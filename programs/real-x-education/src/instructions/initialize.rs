@@ -28,6 +28,7 @@ pub struct ConfigParams {
     pub min_impact_score_bps: u16,
     pub sponsorship_window: i64,
     pub cancellation_window: i64,
+    pub no_show_grace: i64,
     pub max_cancellations: u32,
     pub max_strikes: u8,
     pub strike_slash_bps: u16,
@@ -62,6 +63,7 @@ impl ConfigParams {
         require!(
             self.sponsorship_window > 0
                 && self.cancellation_window > 0
+                && self.no_show_grace > 0
                 && self.voting_period > 0
                 && self.claim_period > 0
                 && self.upload_period > 0,
@@ -92,6 +94,7 @@ impl ConfigParams {
         config.min_impact_score_bps = self.min_impact_score_bps;
         config.sponsorship_window = self.sponsorship_window;
         config.cancellation_window = self.cancellation_window;
+        config.no_show_grace = self.no_show_grace;
         config.max_cancellations = self.max_cancellations;
         config.max_strikes = self.max_strikes;
         config.strike_slash_bps = self.strike_slash_bps;
@@ -251,12 +254,18 @@ pub fn update_authority_handler(
     ctx: Context<UpdateAuthority>,
     new_authority: Pubkey,
 ) -> Result<()> {
-    require!(new_authority != Pubkey::default(), EducationError::InvalidConfig);
+    require!(
+        new_authority != Pubkey::default(),
+        EducationError::InvalidConfig
+    );
     let config = &mut ctx.accounts.config;
     let old_authority = config.authority;
     config.authority = new_authority;
 
-    emit!(AuthorityUpdated { old_authority, new_authority });
+    emit!(AuthorityUpdated {
+        old_authority,
+        new_authority
+    });
     Ok(())
 }
 

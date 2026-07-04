@@ -64,7 +64,9 @@ pub struct RemoveAdmin<'info> {
 }
 
 pub fn remove_admin_handler(ctx: Context<RemoveAdmin>) -> Result<()> {
-    emit!(AdminRemoved { admin: ctx.accounts.admin.admin });
+    emit!(AdminRemoved {
+        admin: ctx.accounts.admin.admin
+    });
     Ok(())
 }
 

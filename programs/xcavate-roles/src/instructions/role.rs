@@ -40,7 +40,10 @@ pub fn assign_role_handler(ctx: Context<AssignRole>, role: Role) -> Result<()> {
     role_account.permission = AccessPermission::Compliant;
     role_account.bump = ctx.bumps.role_account;
 
-    emit!(RoleAssigned { user: role_account.user, role });
+    emit!(RoleAssigned {
+        user: role_account.user,
+        role
+    });
     Ok(())
 }
 
@@ -70,7 +73,10 @@ pub struct RemoveRole<'info> {
 }
 
 pub fn remove_role_handler(ctx: Context<RemoveRole>, role: Role) -> Result<()> {
-    emit!(RoleRemoved { user: ctx.accounts.user.key(), role });
+    emit!(RoleRemoved {
+        user: ctx.accounts.user.key(),
+        role
+    });
     Ok(())
 }
 
@@ -97,7 +103,10 @@ pub struct RenounceRole<'info> {
 }
 
 pub fn renounce_role_handler(ctx: Context<RenounceRole>, role: Role) -> Result<()> {
-    emit!(RoleRemoved { user: ctx.accounts.user.key(), role });
+    emit!(RoleRemoved {
+        user: ctx.accounts.user.key(),
+        role
+    });
     Ok(())
 }
 
@@ -130,7 +139,10 @@ pub fn set_permission_handler(
     permission: AccessPermission,
 ) -> Result<()> {
     let role_account = &mut ctx.accounts.role_account;
-    require!(role_account.permission != permission, RolesError::PermissionAlreadySet);
+    require!(
+        role_account.permission != permission,
+        RolesError::PermissionAlreadySet
+    );
 
     role_account.permission = permission;
     emit!(PermissionUpdated {

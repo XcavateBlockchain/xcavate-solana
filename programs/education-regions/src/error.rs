@@ -32,31 +32,22 @@ pub enum RegionsError {
     /// The treasury account does not match the configured treasury.
     #[msg("Invalid treasury account")]
     InvalidTreasury,
-    /// The region is not currently auctioning.
-    #[msg("Region is not auctioning")]
-    NotAuctioning,
-    /// The auction has already ended.
-    #[msg("Auction has ended")]
-    AuctionEnded,
-    /// The auction has not ended yet.
-    #[msg("Auction has not finished")]
-    AuctionNotFinished,
-    /// The bid does not beat the current highest bid.
-    #[msg("Bid does not beat the current bid")]
-    BidTooLow,
-    /// The first bid is below the minimum collateral.
-    #[msg("Bid is below the minimum")]
-    BidBelowMinimum,
-    /// The passed previous bidder does not match the current highest bidder.
-    #[msg("Wrong previous bidder account")]
-    WrongPreviousBidder,
-    /// The previous bidder account is required to refund the outbid bidder.
-    #[msg("Previous bidder account is required")]
-    MissingPreviousBidder,
-    /// The caller did not win the auction.
-    #[msg("Caller is not the winning bidder")]
-    NotWinner,
-    /// The region state is not in a clearable (rejected/empty) state.
+    /// The XCAV supply is too small to produce a positive operator bond.
+    #[msg("XCAV supply too small to bond")]
+    BondTooSmall,
+    /// The region proposal has not passed, so it can't be claimed.
+    #[msg("Region proposal has not passed")]
+    RegionNotPassed,
+    /// The caller is not the proposer of this region.
+    #[msg("Caller is not the region proposer")]
+    NotProposer,
+    /// The current operator cannot claim their own open seat.
+    #[msg("Operator cannot claim their own seat")]
+    SelfClaimNotAllowed,
+    /// The region's operator changed since the removal was opened.
+    #[msg("Region operator changed since removal opened")]
+    RemovalTargetChanged,
+    /// The region state is not in a clearable (rejected/stale-passed) state.
     #[msg("Region state is not clearable")]
     NotClearable,
     /// The caller is not the region's operator.
