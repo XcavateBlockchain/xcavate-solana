@@ -65,6 +65,12 @@ pub fn create_region_handler(ctx: Context<CreateRegion>, region_id: u16) -> Resu
     );
 
     let now = Clock::get()?.unix_timestamp;
+    // The claim window closes at `claim_deadline`; past it the state is only
+    // clearable (the bond is refunded), so the seat can't be taken late.
+    require!(
+        now < ctx.accounts.region_state.claim_deadline,
+        RegionsError::ClaimWindowClosed
+    );
     let next_owner_change = now
         .checked_add(ctx.accounts.config.owner_change_period)
         .ok_or(RegionsError::Overflow)?;
@@ -76,7 +82,6 @@ pub fn create_region_handler(ctx: Context<CreateRegion>, region_id: u16) -> Resu
     region.region_id = region_id;
     region.owner = ctx.accounts.creator.key();
     region.collateral = collateral;
-    region.active_strikes = 0;
     region.next_owner_change = next_owner_change;
     region.bump = ctx.bumps.region;
 
@@ -88,11 +93,13 @@ pub fn create_region_handler(ctx: Context<CreateRegion>, region_id: u16) -> Resu
     Ok(())
 }
 
-/// Claim an existing region whose operator seat is open (the term has elapsed
-/// after a resignation notice, or a removal opened it). First-come:
+/// Claim a region whose operator seat is open: the term has elapsed, whether it
+/// ran its course or was brought forward by a resignation notice. First-come:
 /// RegionalOperator-only, no vote. The caller bonds 0.1% of the XCAV supply,
-/// which becomes the new collateral; the outgoing operator's collateral is
-/// returned.
+/// which becomes the new collateral, and the outgoing operator's collateral is
+/// returned. The incumbent may claim their own seat to renew it, in which case
+/// `old_owner_token` is omitted and only the difference between their existing
+/// collateral and the current bond moves.
 #[derive(Accounts)]
 #[instruction(region_id: u16)]
 pub struct ClaimOpenRegion<'info> {
@@ -143,24 +150,19 @@ pub struct ClaimOpenRegion<'info> {
     pub region: Box<Account<'info, Region>>,
 
     /// The outgoing operator's XCAV account; receives their returned collateral.
+    /// Omitted when the incumbent renews their own seat (they are refunded
+    /// through `new_operator_token` instead).
     #[account(
         mut,
         token::mint = config.xcav_mint,
         token::authority = region.owner,
     )]
-    pub old_owner_token: Box<InterfaceAccount<'info, TokenAccount>>,
+    pub old_owner_token: Option<Box<InterfaceAccount<'info, TokenAccount>>>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
 
 pub fn claim_open_region_handler(ctx: Context<ClaimOpenRegion>, _region_id: u16) -> Result<()> {
-    // Claiming installs a new operator with a clean strike record, so the seat
-    // must pass to a different operator; the incumbent can't claim their own.
-    require!(
-        ctx.accounts.new_operator.key() != ctx.accounts.region.owner,
-        RegionsError::SelfClaimNotAllowed
-    );
-
     let now = Clock::get()?.unix_timestamp;
     // The seat must be open: the operator's term has elapsed.
     require!(
@@ -171,39 +173,71 @@ pub fn claim_open_region_handler(ctx: Context<ClaimOpenRegion>, _region_id: u16)
     let bond = operator_bond(ctx.accounts.xcav_mint.supply).ok_or(RegionsError::BondTooSmall)?;
     let decimals = ctx.accounts.xcav_mint.decimals;
     let config_bump = ctx.accounts.config.bump;
-    let outgoing_collateral = ctx.accounts.region.collateral;
+    let existing_collateral = ctx.accounts.region.collateral;
+    let new_owner = ctx.accounts.new_operator.key();
 
-    // Lock the new operator's bond, then return the outgoing operator's
-    // collateral from the vault.
-    lock_to_vault(
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.new_operator_token.to_account_info(),
-        &ctx.accounts.xcav_mint.to_account_info(),
-        &ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.new_operator.to_account_info(),
-        bond,
-        decimals,
-    )?;
-    release_from_vault(
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.vault.to_account_info(),
-        &ctx.accounts.xcav_mint.to_account_info(),
-        &ctx.accounts.old_owner_token.to_account_info(),
-        &ctx.accounts.config.to_account_info(),
-        config_bump,
-        outgoing_collateral,
-        decimals,
-    )?;
+    if new_owner == ctx.accounts.region.owner {
+        // The incumbent renews their own seat: keep the collateral in place and
+        // re-bond to the current amount, moving only the difference. There is no
+        // separate outgoing account here, so `old_owner_token` is omitted.
+        if bond > existing_collateral {
+            lock_to_vault(
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.new_operator_token.to_account_info(),
+                &ctx.accounts.xcav_mint.to_account_info(),
+                &ctx.accounts.vault.to_account_info(),
+                &ctx.accounts.new_operator.to_account_info(),
+                bond - existing_collateral,
+                decimals,
+            )?;
+        } else if existing_collateral > bond {
+            release_from_vault(
+                &ctx.accounts.token_program.to_account_info(),
+                &ctx.accounts.vault.to_account_info(),
+                &ctx.accounts.xcav_mint.to_account_info(),
+                &ctx.accounts.new_operator_token.to_account_info(),
+                &ctx.accounts.config.to_account_info(),
+                config_bump,
+                existing_collateral - bond,
+                decimals,
+            )?;
+        }
+    } else {
+        // A different operator takes over: lock their full bond, then return the
+        // outgoing operator's collateral to their account.
+        let old_owner_token = ctx
+            .accounts
+            .old_owner_token
+            .as_ref()
+            .ok_or(RegionsError::MissingRecipientToken)?;
+        lock_to_vault(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.new_operator_token.to_account_info(),
+            &ctx.accounts.xcav_mint.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.new_operator.to_account_info(),
+            bond,
+            decimals,
+        )?;
+        release_from_vault(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.vault.to_account_info(),
+            &ctx.accounts.xcav_mint.to_account_info(),
+            &old_owner_token.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            config_bump,
+            existing_collateral,
+            decimals,
+        )?;
+    }
 
     let next_owner_change = now
         .checked_add(ctx.accounts.config.owner_change_period)
         .ok_or(RegionsError::Overflow)?;
-    let new_owner = ctx.accounts.new_operator.key();
 
     let region = &mut ctx.accounts.region;
     region.owner = new_owner;
     region.collateral = bond;
-    region.active_strikes = 0;
     region.next_owner_change = next_owner_change;
 
     emit!(RegionClaimed {

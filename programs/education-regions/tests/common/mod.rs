@@ -326,11 +326,7 @@ pub fn default_params() -> ConfigParams {
         owner_change_period: 10_000,
         threshold_bps: 5_000,
         quorum: 100_000_000,
-        removal_deposit: DEPOSIT,
-        removal_voting_period: 1_000,
-        slash_amount: 100_000_000,
         notice_period: 5_000,
-        allowed_strikes: 3,
     }
 }
 
@@ -523,7 +519,8 @@ pub fn create_region_ix(creator: &Pubkey, region_id: u16) -> Instruction {
     )
 }
 
-/// Claim an existing region whose seat is open, bonding 0.1% of XCAV supply.
+/// Take over an open region seat as a different operator, bonding 0.1% of XCAV
+/// supply and refunding the outgoing operator.
 pub fn claim_open_region_ix(
     new_operator: &Pubkey,
     region_id: u16,
@@ -540,7 +537,28 @@ pub fn claim_open_region_ix(
             new_operator_token: token_acc(new_operator),
             vault: vault(),
             region: region_pda(region_id),
-            old_owner_token: token_acc(old_owner),
+            old_owner_token: Some(token_acc(old_owner)),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Renew the incumbent's own open seat (no outgoing account; only the bond
+/// difference moves).
+pub fn renew_region_ix(operator: &Pubkey, region_id: u16) -> Instruction {
+    Instruction::new_with_bytes(
+        rid(),
+        &education_regions::instruction::ClaimOpenRegion { region_id }.data(),
+        education_regions::accounts::ClaimOpenRegion {
+            new_operator: *operator,
+            config: regions_config(),
+            operator_role: role_pda(operator, Role::RegionalOperator),
+            xcav_mint: xcav_mint(),
+            new_operator_token: token_acc(operator),
+            vault: vault(),
+            region: region_pda(region_id),
+            old_owner_token: None,
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -699,29 +717,8 @@ pub fn region_state_of(svm: &LiteSVM, region_id: u16) -> RegionState {
         .unwrap()
 }
 
-// --- owner removal / replacement ---
+// --- created regions / seat turnover ---
 
-pub fn removal_proposal_pda(region_id: u16) -> Pubkey {
-    Pubkey::find_program_address(
-        &[
-            education_regions::REMOVAL_PROPOSAL_SEED,
-            &region_id.to_le_bytes(),
-        ],
-        &rid(),
-    )
-    .0
-}
-pub fn removal_vote_pda(proposal_id: u64, voter: &Pubkey) -> Pubkey {
-    Pubkey::find_program_address(
-        &[
-            education_regions::REMOVAL_VOTE_SEED,
-            &proposal_id.to_le_bytes(),
-            voter.as_ref(),
-        ],
-        &rid(),
-    )
-    .0
-}
 pub fn region_of(svm: &LiteSVM, region_id: u16) -> education_regions::state::Region {
     education_regions::state::Region::try_deserialize(
         &mut &svm.get_account(&region_pda(region_id)).unwrap().data[..],
@@ -756,92 +753,6 @@ pub fn reach_seat_open(svm: &mut LiteSVM, operator: &Keypair, authority: &Keypai
     reach_created(svm, operator, authority);
     ok(svm, resign_ix(&operator.pubkey(), 1), operator, &[operator]);
     warp(svm, 6_000);
-}
-
-pub fn propose_remove_ix(proposer: &Pubkey, region_id: u16) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::ProposeRemoveOperator { region_id }.data(),
-        education_regions::accounts::ProposeRemoveOperator {
-            proposer: *proposer,
-            config: regions_config(),
-            xcav_mint: xcav_mint(),
-            proposer_token: token_acc(proposer),
-            vault: vault(),
-            region: region_pda(region_id),
-            removal_proposal: removal_proposal_pda(region_id),
-            token_program: TOKEN_PROGRAM_ID,
-            system_program: SYS,
-        }
-        .to_account_metas(None),
-    )
-}
-
-pub fn vote_removal_ix(
-    voter: &Pubkey,
-    region_id: u16,
-    proposal_id: u64,
-    vote: Vote,
-    amount: u64,
-) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::VoteOnRemoval {
-            region_id,
-            vote,
-            amount,
-        }
-        .data(),
-        education_regions::accounts::VoteOnRemoval {
-            voter: *voter,
-            config: regions_config(),
-            xcav_mint: xcav_mint(),
-            voter_token: token_acc(voter),
-            vault: vault(),
-            removal_proposal: removal_proposal_pda(region_id),
-            vote_record: removal_vote_pda(proposal_id, voter),
-            token_program: TOKEN_PROGRAM_ID,
-            system_program: SYS,
-        }
-        .to_account_metas(None),
-    )
-}
-
-pub fn finalize_removal_ix(cranker: &Pubkey, region_id: u16, proposer: &Pubkey) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::FinalizeRemoval { region_id }.data(),
-        education_regions::accounts::FinalizeRemoval {
-            cranker: *cranker,
-            config: regions_config(),
-            xcav_mint: xcav_mint(),
-            vault: vault(),
-            region: region_pda(region_id),
-            removal_proposal: removal_proposal_pda(region_id),
-            proposer: *proposer,
-            proposer_token: Some(token_acc(proposer)),
-            treasury: treasury_pda(),
-            token_program: TOKEN_PROGRAM_ID,
-        }
-        .to_account_metas(None),
-    )
-}
-
-pub fn unlock_removal_ix(voter: &Pubkey, proposal_id: u64) -> Instruction {
-    Instruction::new_with_bytes(
-        rid(),
-        &education_regions::instruction::UnlockRemovalVote { proposal_id }.data(),
-        education_regions::accounts::UnlockRemovalVote {
-            voter: *voter,
-            config: regions_config(),
-            xcav_mint: xcav_mint(),
-            voter_token: token_acc(voter),
-            vault: vault(),
-            vote_record: removal_vote_pda(proposal_id, voter),
-            token_program: TOKEN_PROGRAM_ID,
-        }
-        .to_account_metas(None),
-    )
 }
 
 pub fn resign_ix(operator: &Pubkey, region_id: u16) -> Instruction {

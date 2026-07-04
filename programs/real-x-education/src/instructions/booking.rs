@@ -126,10 +126,18 @@ pub fn book_module_handler(
 
     let clock = Clock::get()?;
     // The scheduled delivery must be a present-or-future time, since scoring and
-    // no-show expiry both key off it.
+    // no-show expiry both key off it, and no further out than the delivery window
+    // so an unclaimed booking can't strand the sponsor's escrow indefinitely.
     require!(
         delivery_at >= clock.unix_timestamp,
         EducationError::DeliveryNotReached
+    );
+    require!(
+        delivery_at
+            <= clock
+                .unix_timestamp
+                .saturating_add(ctx.accounts.config.max_delivery_window),
+        EducationError::DeliveryTooFar
     );
     let booking_id = ctx.accounts.config.next_booking_id;
     let deposit = ctx.accounts.config.booking_deposit;
@@ -222,11 +230,13 @@ pub fn book_module_handler(
 #[instruction(module_id: u64, booking_id: u64)]
 pub struct FinishBooking<'info> {
     #[account(mut)]
-    pub school: Signer<'info>,
+    pub cranker: Signer<'info>,
 
-    // Gated by ownership, not by an active ModuleBooker role: the `booking.school`
-    // constraint below already restricts this to the booking's own school, which
-    // is all that's needed to release its deposit and settle the sponsorship.
+    /// CHECK: pinned to the booking's school by the `booking.school` constraint
+    /// below; not a signer, so anyone can settle a scored booking.
+    #[account(mut)]
+    pub school: UncheckedAccount<'info>,
+
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,
 

@@ -602,6 +602,191 @@ pub fn expire_claim_handler(
     Ok(())
 }
 
+/// Expire an unclaimed booking whose delivery came and went without any lecturer
+/// claiming it. Permissionless once the no-show grace window past the scheduled
+/// delivery has passed. Returns the token's payment to the sponsor and the
+/// deposit to the school, so a stale booking can't strand the sponsor's escrow.
+/// A claimed no-show goes through `expire_claim`; a scored one through
+/// `finish_booking`.
+#[derive(Accounts)]
+#[instruction(module_id: u64, booking_id: u64)]
+pub struct ExpireBooking<'info> {
+    #[account(mut)]
+    pub cranker: Signer<'info>,
+
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+
+    #[account(
+        mut,
+        seeds = [MODULE_SEED, &module_id.to_le_bytes()],
+        bump = module.bump,
+    )]
+    pub module: Box<Account<'info, Module>>,
+
+    /// CHECK: pinned to the booking's school by the `booking.school` constraint
+    /// below; receives the refunded deposit and the reclaimed rent.
+    #[account(mut)]
+    pub school: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        close = school,
+        seeds = [BOOKING_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
+        bump = booking.bump,
+        constraint = booking.school == school.key() @ EducationError::NoPermission,
+    )]
+    pub booking: Box<Account<'info, Booking>>,
+
+    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
+    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_SEED],
+        bump,
+        token::mint = config.xcav_mint,
+        token::authority = config,
+    )]
+    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Receives the refunded booking deposit; must be the school's account.
+    #[account(
+        mut,
+        token::mint = config.xcav_mint,
+        token::authority = school,
+    )]
+    pub school_xcav: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(address = booking.payment_asset @ EducationError::InvalidMint)]
+    pub payment_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    #[account(
+        mut,
+        seeds = [SPONSOR_ESCROW_SEED, &module_id.to_le_bytes(), &booking.sponsor_id.to_le_bytes()],
+        bump,
+        token::mint = payment_mint,
+        token::authority = config,
+    )]
+    pub sponsor_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [BOOK_ESCROW_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
+        bump,
+        token::mint = payment_mint,
+        token::authority = config,
+    )]
+    pub booking_escrow: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        seeds = [SPONSORSHIP_SEED, &module_id.to_le_bytes(), &booking.sponsor_id.to_le_bytes()],
+        bump = sponsorship.bump,
+    )]
+    pub sponsorship: Box<Account<'info, Sponsorship>>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+pub fn expire_booking_handler(
+    ctx: Context<ExpireBooking>,
+    module_id: u64,
+    booking_id: u64,
+) -> Result<()> {
+    // Only an unclaimed, unscored booking expires here.
+    require!(
+        ctx.accounts.booking.lecturer.is_none(),
+        EducationError::LecturerAlreadySet
+    );
+    require!(
+        ctx.accounts.booking.score.is_none(),
+        EducationError::ScoreAlreadySet
+    );
+
+    let now = Clock::get()?.unix_timestamp;
+    let deadline = ctx
+        .accounts
+        .booking
+        .delivery_at
+        .saturating_add(ctx.accounts.config.no_show_grace);
+    require!(now > deadline, EducationError::NoShowWindowNotExpired);
+
+    let config_bump = ctx.accounts.config.bump;
+    let per_token = ctx.accounts.booking.price_per_token;
+    let deposit = ctx.accounts.booking.deposit;
+
+    // Neither party is at fault for a lecturer that never appeared: return the
+    // token's payment to the sponsor escrow and the deposit to the school.
+    release_from_vault(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.booking_escrow.to_account_info(),
+        &ctx.accounts.payment_mint.to_account_info(),
+        &ctx.accounts.sponsor_escrow.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        config_bump,
+        per_token,
+        ctx.accounts.payment_mint.decimals,
+    )?;
+    release_from_vault(
+        &ctx.accounts.token_program.to_account_info(),
+        &ctx.accounts.vault.to_account_info(),
+        &ctx.accounts.xcav_mint.to_account_info(),
+        &ctx.accounts.school_xcav.to_account_info(),
+        &ctx.accounts.config.to_account_info(),
+        config_bump,
+        deposit,
+        ctx.accounts.xcav_mint.decimals,
+    )?;
+
+    // The token becomes bookable again and no longer counts against the
+    // sponsorship or the module's student allocation.
+    ctx.accounts.sponsorship.amount = ctx
+        .accounts
+        .sponsorship
+        .amount
+        .checked_add(1)
+        .ok_or(EducationError::Overflow)?;
+    ctx.accounts.sponsorship.active_bookings = ctx
+        .accounts
+        .sponsorship
+        .active_bookings
+        .checked_sub(1)
+        .ok_or(EducationError::Underflow)?;
+    ctx.accounts.module.school_allocation = ctx
+        .accounts
+        .module
+        .school_allocation
+        .checked_add(1)
+        .ok_or(EducationError::Overflow)?;
+    ctx.accounts.module.student_allocation = ctx
+        .accounts
+        .module
+        .student_allocation
+        .checked_sub(1)
+        .ok_or(EducationError::Underflow)?;
+
+    // Close the drained escrow to return its rent, unless a stray transfer left a
+    // residual balance behind.
+    ctx.accounts.booking_escrow.reload()?;
+    if ctx.accounts.booking_escrow.amount == 0 {
+        close_vault_account(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.booking_escrow.to_account_info(),
+            &ctx.accounts.school.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            config_bump,
+        )?;
+    }
+
+    emit!(BookingExpired {
+        module_id,
+        booking_id,
+        school: ctx.accounts.school.key(),
+    });
+    Ok(())
+}
+
 #[event]
 pub struct BookingCancelled {
     pub module_id: u64,
@@ -609,6 +794,13 @@ pub struct BookingCancelled {
     pub school: Pubkey,
     pub cancellation_count: u32,
     pub deposit_slashed: bool,
+}
+
+#[event]
+pub struct BookingExpired {
+    pub module_id: u64,
+    pub booking_id: u64,
+    pub school: Pubkey,
 }
 
 #[event]

@@ -38,7 +38,7 @@ pub struct Config {
     pub authority: Pubkey,
     /// The XCAV governance mint staked for proposals, votes, and operator bonds.
     pub xcav_mint: Pubkey,
-    /// XCAV token account that receives slashed deposits.
+    /// XCAV token account collecting protocol funds (shared with real-x).
     pub treasury: Pubkey,
     /// Minimum XCAV a voter must lock to vote.
     pub minimum_voting_amount: u64,
@@ -51,17 +51,8 @@ pub struct Config {
     pub threshold_bps: u16,
     /// Minimum total voting power for a proposal to be valid.
     pub quorum: u64,
-    /// XCAV locked when proposing to remove a region's operator.
-    pub removal_deposit: u64,
-    /// Seconds an operator-removal proposal stays open for voting.
-    pub removal_voting_period: i64,
-    /// XCAV slashed from a region's collateral per upheld strike.
-    pub slash_amount: u64,
     /// Notice an operator must give before resigning (seconds).
     pub notice_period: i64,
-    /// Strikes that, once reached, open a region's seat for another operator to
-    /// claim.
-    pub allowed_strikes: u8,
     /// Monotonic id for the next proposal.
     pub proposal_counter: u64,
     pub bump: u8,
@@ -74,7 +65,6 @@ pub struct Region {
     pub region_id: u16,
     pub owner: Pubkey,
     pub collateral: u64,
-    pub active_strikes: u8,
     pub next_owner_change: i64,
     pub bump: u8,
 }
@@ -138,42 +128,6 @@ pub struct RegionState {
 #[account]
 #[derive(InitSpace)]
 pub struct VoteRecord {
-    pub proposal_id: u64,
-    pub voter: Pubkey,
-    pub region_id: u16,
-    pub vote: Vote,
-    pub power: u64,
-    pub expiry: i64,
-    pub bump: u8,
-}
-
-/// An open proposal to remove a region's operator, with its running vote tally.
-/// One per region (the PDA is seeded by `region_id`), so a region can only have a
-/// single removal vote in flight at a time. `target_owner` is the operator the
-/// vote was opened against; if the seat changes hands before finalize the removal
-/// is voided. The proposer's `deposit` is held in the vault and returned if the
-/// proposal passes, slashed otherwise.
-#[account]
-#[derive(InitSpace)]
-pub struct RemovalProposal {
-    pub proposal_id: u64,
-    pub region_id: u16,
-    pub proposer: Pubkey,
-    pub target_owner: Pubkey,
-    pub created_at: i64,
-    pub expiry: i64,
-    pub deposit: u64,
-    pub yes_power: u64,
-    pub no_power: u64,
-    pub abstain_power: u64,
-    pub bump: u8,
-}
-
-/// One voter's vote on a removal proposal. Mirrors `VoteRecord` but is a distinct
-/// account so removal votes never collide with region-proposal votes.
-#[account]
-#[derive(InitSpace)]
-pub struct RemovalVoteRecord {
     pub proposal_id: u64,
     pub voter: Pubkey,
     pub region_id: u16,

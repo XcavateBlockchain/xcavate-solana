@@ -105,7 +105,8 @@ pub mod real_x_education {
         booking::book_module_handler(ctx, module_id, sponsor_id, delivery_at, metadata)
     }
 
-    /// Release the deposit and close a scored booking. ModuleBooker-only.
+    /// Release the deposit and close a scored booking. Permissionless; the
+    /// deposit always returns to the booking's school.
     pub fn finish_booking_process(
         ctx: Context<FinishBooking>,
         module_id: u64,
@@ -174,6 +175,16 @@ pub mod real_x_education {
         cancel::expire_claim_handler(ctx, module_id, booking_id)
     }
 
+    /// Expire an unclaimed booking once the delivery grace window passes,
+    /// refunding the sponsor and the school. Permissionless.
+    pub fn expire_booking(
+        ctx: Context<ExpireBooking>,
+        module_id: u64,
+        booking_id: u64,
+    ) -> Result<()> {
+        cancel::expire_booking_handler(ctx, module_id, booking_id)
+    }
+
     /// Register as a module deliverer (or top up the deposit).
     /// ModuleDeliverer-only.
     pub fn register_module_deliverer(ctx: Context<RegisterDeliverer>) -> Result<()> {
@@ -228,8 +239,9 @@ pub mod real_x_education {
         proposal::claim_proposal_handler(ctx, proposal_id)
     }
 
-    /// Upload the content for a reserved proposal and send it for review,
-    /// refunding the bond. ModuleCreator-only (the claimant).
+    /// Upload the content for a reserved proposal and send it for review. The
+    /// bond keeps riding with the proposal (no token movement here).
+    /// ModuleCreator-only (the claimant).
     pub fn upload_proposal(
         ctx: Context<UploadProposal>,
         proposal_id: u64,

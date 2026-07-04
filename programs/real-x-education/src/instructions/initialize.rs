@@ -29,6 +29,7 @@ pub struct ConfigParams {
     pub sponsorship_window: i64,
     pub cancellation_window: i64,
     pub no_show_grace: i64,
+    pub max_delivery_window: i64,
     pub max_cancellations: u32,
     pub max_strikes: u8,
     pub strike_slash_bps: u16,
@@ -64,6 +65,7 @@ impl ConfigParams {
             self.sponsorship_window > 0
                 && self.cancellation_window > 0
                 && self.no_show_grace > 0
+                && self.max_delivery_window > 0
                 && self.voting_period > 0
                 && self.claim_period > 0
                 && self.upload_period > 0,
@@ -76,6 +78,16 @@ impl ConfigParams {
                 && self.booking_deposit > 0
                 && self.deliverer_deposit > 0
                 && self.proposal_deposit > 0,
+            EducationError::InvalidConfig
+        );
+        // Zero would silently disable these gates rather than tighten them.
+        require!(
+            self.strike_slash_bps > 0
+                && self.threshold_bps > 0
+                && self.quorum > 0
+                && self.minimum_voting_amount > 0
+                && self.max_cancellations > 0
+                && self.max_strikes > 0,
             EducationError::InvalidConfig
         );
         Ok(())
@@ -95,6 +107,7 @@ impl ConfigParams {
         config.sponsorship_window = self.sponsorship_window;
         config.cancellation_window = self.cancellation_window;
         config.no_show_grace = self.no_show_grace;
+        config.max_delivery_window = self.max_delivery_window;
         config.max_cancellations = self.max_cancellations;
         config.max_strikes = self.max_strikes;
         config.strike_slash_bps = self.strike_slash_bps;

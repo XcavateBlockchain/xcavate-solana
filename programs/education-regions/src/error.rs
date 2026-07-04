@@ -38,15 +38,12 @@ pub enum RegionsError {
     /// The region proposal has not passed, so it can't be claimed.
     #[msg("Region proposal has not passed")]
     RegionNotPassed,
+    /// The window to claim a passed region has closed.
+    #[msg("Claim window has closed")]
+    ClaimWindowClosed,
     /// The caller is not the proposer of this region.
     #[msg("Caller is not the region proposer")]
     NotProposer,
-    /// The current operator cannot claim their own open seat.
-    #[msg("Operator cannot claim their own seat")]
-    SelfClaimNotAllowed,
-    /// The region's operator changed since the removal was opened.
-    #[msg("Region operator changed since removal opened")]
-    RemovalTargetChanged,
     /// The region state is not in a clearable (rejected/stale-passed) state.
     #[msg("Region state is not clearable")]
     NotClearable,

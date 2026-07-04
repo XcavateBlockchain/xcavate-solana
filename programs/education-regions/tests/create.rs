@@ -24,7 +24,6 @@ fn create_region_makes_proposer_the_operator() {
     assert_eq!(region.owner, operator.pubkey());
     // The bond locked when proposing (DEPOSIT) is now the region's collateral.
     assert_eq!(region.collateral, DEPOSIT);
-    assert_eq!(region.active_strikes, 0);
     // The region state was closed.
     assert!(svm
         .get_account(&region_state(1))
@@ -118,25 +117,36 @@ fn claim_open_region_changes_operator_and_refunds_old() {
     let region = region_of(&svm, 1);
     assert_eq!(region.owner, newop.pubkey());
     assert_eq!(region.collateral, DEPOSIT); // the new bond
-    assert_eq!(region.active_strikes, 0);
-    // Outgoing operator got their collateral back; the new one bonded DEPOSIT.
+                                            // Outgoing operator got their collateral back; the new one bonded DEPOSIT.
     assert_eq!(xcav_balance(&svm, &operator.pubkey()) - old_before, DEPOSIT);
     assert_eq!(new_before - xcav_balance(&svm, &newop.pubkey()), DEPOSIT);
 }
 
 #[test]
-fn claim_open_region_rejects_self_claim() {
+fn incumbent_renews_own_open_seat() {
     let (mut svm, operator, authority) = setup();
     // Seat opened via the operator's own resignation.
     reach_seat_open(&mut svm, &operator, &authority);
 
-    fails_with(
+    let before = xcav_balance(&svm, &operator.pubkey());
+    let vault_before = vault_balance(&svm);
+    let old_change = region_of(&svm, 1).next_owner_change;
+
+    ok(
         &mut svm,
-        claim_open_region_ix(&operator.pubkey(), 1, &operator.pubkey()),
+        renew_region_ix(&operator.pubkey(), 1),
         &operator,
         &[&operator],
-        "DuplicateMutableAccount",
     );
+
+    let region = region_of(&svm, 1);
+    // Same operator keeps the seat; the term is pushed out again.
+    assert_eq!(region.owner, operator.pubkey());
+    assert_eq!(region.collateral, DEPOSIT);
+    assert!(region.next_owner_change > old_change);
+    // The bond is unchanged (supply is fixed in the test), so nothing moves.
+    assert_eq!(xcav_balance(&svm, &operator.pubkey()), before);
+    assert_eq!(vault_balance(&svm), vault_before);
 }
 
 #[test]

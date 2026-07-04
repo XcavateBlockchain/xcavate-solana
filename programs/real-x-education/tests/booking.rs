@@ -1081,3 +1081,258 @@ fn reclaim_sponsorship_works_after_role_revoked() {
 
     assert_eq!(sponsorship_of(&w.svm, 0, 0).amount, 0);
 }
+
+#[test]
+fn expire_booking_recovers_stale_unclaimed_booking() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+
+    ok(
+        &mut w.svm,
+        create_module_ix(&creator.pubkey(), 1, 0, 10),
+        &creator,
+        &[&creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&sponsor.pubkey(), 0, 0, 2),
+        &sponsor,
+        &[&sponsor],
+    );
+
+    let school_before = balance(&w.svm, &xcav_mint(), &school.pubkey());
+    let sponsor_escrow_before = spl_amount(&w.svm, &sponsor_escrow_pda(0, 0));
+    let delivery = now_ts(&w.svm) + 1_000;
+    ok(
+        &mut w.svm,
+        book_ix_at(&school.pubkey(), 0, 0, 0, delivery),
+        &school,
+        &[&school],
+    );
+    // The booking is never claimed; its payment sits in the booking escrow.
+    assert_eq!(
+        spl_amount(&w.svm, &sponsor_escrow_pda(0, 0)),
+        sponsor_escrow_before - PER_TOKEN
+    );
+
+    // Before the delivery grace window passes, expiry is rejected.
+    let cranker = funded(&mut w.svm);
+    err(
+        &mut w.svm,
+        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0),
+        &cranker,
+        &[&cranker],
+        "NoShowWindowNotExpired",
+    );
+
+    // Past delivery + no_show_grace (1_000), anyone can expire it.
+    warp(&mut w.svm, 2_100);
+    ok(
+        &mut w.svm,
+        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0),
+        &cranker,
+        &[&cranker],
+    );
+
+    // Sponsor's payment and the school's deposit are both returned, the token is
+    // bookable again, and the booking + escrow are closed.
+    assert_eq!(
+        spl_amount(&w.svm, &sponsor_escrow_pda(0, 0)),
+        sponsor_escrow_before
+    );
+    assert_eq!(
+        balance(&w.svm, &xcav_mint(), &school.pubkey()),
+        school_before
+    );
+    assert_eq!(sponsorship_of(&w.svm, 0, 0).amount, 2);
+    assert_eq!(sponsorship_of(&w.svm, 0, 0).active_bookings, 0);
+    // The two sponsored tokens are both back in the school allocation.
+    assert_eq!(module_of(&w.svm, 0).school_allocation, 2);
+    assert!(closed(&w.svm, &booking_pda(0, 0)));
+    assert!(closed(&w.svm, &book_escrow_pda(0, 0)));
+}
+
+#[test]
+fn expire_booking_rejects_a_claimed_booking() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+
+    ok(
+        &mut w.svm,
+        create_module_ix(&creator.pubkey(), 1, 0, 10),
+        &creator,
+        &[&creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&sponsor.pubkey(), 0, 0, 1),
+        &sponsor,
+        &[&sponsor],
+    );
+    let delivery = now_ts(&w.svm) + 1_000;
+    ok(
+        &mut w.svm,
+        book_ix_at(&school.pubkey(), 0, 0, 0, delivery),
+        &school,
+        &[&school],
+    );
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&lecturer.pubkey()),
+        &lecturer,
+        &[&lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&lecturer.pubkey(), 0, 0),
+        &lecturer,
+        &[&lecturer],
+    );
+
+    // A claimed booking belongs to expire_claim, not expire_booking.
+    warp(&mut w.svm, 2_100);
+    let cranker = funded(&mut w.svm);
+    err(
+        &mut w.svm,
+        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0),
+        &cranker,
+        &[&cranker],
+        "LecturerAlreadySet",
+    );
+}
+
+#[test]
+fn finish_booking_is_permissionless() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
+    let agent = with_role(&mut w, Role::ModuleAIAgent);
+
+    ok(
+        &mut w.svm,
+        create_module_ix(&creator.pubkey(), 1, 0, 10),
+        &creator,
+        &[&creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&sponsor.pubkey(), 0, 0, 1),
+        &sponsor,
+        &[&sponsor],
+    );
+    {
+        let d = now_ts(&w.svm);
+        ok(
+            &mut w.svm,
+            book_ix_at(&school.pubkey(), 0, 0, 0, d),
+            &school,
+            &[&school],
+        );
+    }
+    ok(
+        &mut w.svm,
+        register_deliverer_ix(&lecturer.pubkey()),
+        &lecturer,
+        &[&lecturer],
+    );
+    ok(
+        &mut w.svm,
+        claim_ix(&lecturer.pubkey(), 0, 0),
+        &lecturer,
+        &[&lecturer],
+    );
+    ok(
+        &mut w.svm,
+        submit_score_ix(
+            &agent.pubkey(),
+            0,
+            0,
+            10_000,
+            1,
+            &creator.pubkey(),
+            &w.operator.pubkey(),
+            &w.protocol.pubkey(),
+            &lecturer.pubkey(),
+            &sponsor.pubkey(),
+        ),
+        &agent,
+        &[&agent],
+    );
+
+    // A stranger with no role finishes the scored booking; the deposit still
+    // returns to the school, so the sponsor isn't blocked by an idle school.
+    let stranger = funded(&mut w.svm);
+    let school_before = balance(&w.svm, &xcav_mint(), &school.pubkey());
+    ok(
+        &mut w.svm,
+        finish_ix_by(&stranger.pubkey(), &school.pubkey(), 0, 0),
+        &stranger,
+        &[&stranger],
+    );
+    assert_eq!(
+        balance(&w.svm, &xcav_mint(), &school.pubkey()) - school_before,
+        BOOKING_DEPOSIT
+    );
+    assert_eq!(sponsorship_of(&w.svm, 0, 0).active_bookings, 0);
+    assert!(closed(&w.svm, &booking_pda(0, 0)));
+}
+
+#[test]
+fn book_module_rejects_delivery_past_window() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+    let school = with_role(&mut w, Role::ModuleBooker);
+
+    // Tighten the delivery window to 500s.
+    ok(
+        &mut w.svm,
+        update_config_ix(
+            &w.authority.pubkey(),
+            &w.protocol.pubkey(),
+            ConfigParams {
+                max_delivery_window: 500,
+                ..default_params()
+            },
+        ),
+        &w.authority,
+        &[&w.authority],
+    );
+
+    ok(
+        &mut w.svm,
+        create_module_ix(&creator.pubkey(), 1, 0, 10),
+        &creator,
+        &[&creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&sponsor.pubkey(), 0, 0, 1),
+        &sponsor,
+        &[&sponsor],
+    );
+
+    // A delivery beyond the window is rejected; one inside it is accepted.
+    let too_far = now_ts(&w.svm) + 1_000;
+    err(
+        &mut w.svm,
+        book_ix_at(&school.pubkey(), 0, 0, 0, too_far),
+        &school,
+        &[&school],
+        "DeliveryTooFar",
+    );
+    let ok_delivery = now_ts(&w.svm) + 400;
+    ok(
+        &mut w.svm,
+        book_ix_at(&school.pubkey(), 0, 0, 0, ok_delivery),
+        &school,
+        &[&school],
+    );
+}

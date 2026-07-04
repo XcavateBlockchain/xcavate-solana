@@ -15,9 +15,10 @@ declare_id!("HnXYYBRgi453sKjjKwDpbMjJZxKvUEn4KPtPgnLKGkz7");
 
 /// Region governance: a regional operator proposes a region by bonding XCAV,
 /// holders vote, and on a pass the proposer claims it and becomes the operator.
-/// Seats turn over by resignation or removal, after which any operator can claim
-/// the open region by bonding. Education modules are scoped to regions and pay
-/// out to the region's operator.
+/// A seat turns over at the end of the operator's term (or earlier if they
+/// resign), after which any operator can claim the open region by bonding and the
+/// incumbent can renew. Education modules are scoped to regions and pay out to
+/// the region's operator.
 #[program]
 pub mod education_regions {
     use super::*;
@@ -70,8 +71,9 @@ pub mod education_regions {
         create::create_region_handler(ctx, region_id)
     }
 
-    /// Claim an existing region whose seat is open, bonding 0.1% of XCAV supply.
-    /// First-come; RegionalOperator-only.
+    /// Claim an open region seat, bonding 0.1% of XCAV supply. First-come and
+    /// RegionalOperator-only; the incumbent may also call this to renew, paying
+    /// only the difference if the bond has moved since they last bonded.
     pub fn claim_open_region(ctx: Context<ClaimOpenRegion>, region_id: u16) -> Result<()> {
         create::claim_open_region_handler(ctx, region_id)
     }
@@ -84,34 +86,6 @@ pub mod education_regions {
     /// Close a rejected/empty region state so the region can be proposed again.
     pub fn clear_region_state(ctx: Context<ClearRegionState>, region_id: u16) -> Result<()> {
         cleanup::clear_region_state_handler(ctx, region_id)
-    }
-
-    /// Propose removing a region's operator. Locks a dispute deposit.
-    pub fn propose_remove_operator(
-        ctx: Context<ProposeRemoveOperator>,
-        region_id: u16,
-    ) -> Result<()> {
-        removal::propose_remove_operator_handler(ctx, region_id)
-    }
-
-    /// Vote on an open operator-removal proposal. Anyone may vote.
-    pub fn vote_on_removal(
-        ctx: Context<VoteOnRemoval>,
-        region_id: u16,
-        vote: Vote,
-        amount: u64,
-    ) -> Result<()> {
-        removal::vote_on_removal_handler(ctx, region_id, vote, amount)
-    }
-
-    /// Finalize an expired removal proposal (permissionless crank).
-    pub fn finalize_removal(ctx: Context<FinalizeRemoval>, region_id: u16) -> Result<()> {
-        removal::finalize_removal_handler(ctx, region_id)
-    }
-
-    /// Reclaim locked voting tokens after a removal proposal's window ends.
-    pub fn unlock_removal_vote(ctx: Context<UnlockRemovalVote>, proposal_id: u64) -> Result<()> {
-        removal::unlock_removal_vote_handler(ctx, proposal_id)
     }
 
     /// Schedule the caller's own departure as a region's operator.

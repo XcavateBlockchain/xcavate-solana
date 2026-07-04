@@ -49,6 +49,9 @@ pub struct Config {
     /// Grace period (seconds) after a booking's scheduled delivery before a
     /// no-show claim can be expired (striking the absent lecturer).
     pub no_show_grace: i64,
+    /// Furthest ahead (seconds) a booking's delivery may be scheduled, so an
+    /// unclaimed booking can't strand the sponsor's escrow indefinitely.
+    pub max_delivery_window: i64,
 
     /// School cancellations within the window before its deposit is slashed.
     pub max_cancellations: u32,

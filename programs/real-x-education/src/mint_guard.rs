@@ -34,6 +34,7 @@ pub fn require_supported_mint(mint: &AccountInfo) -> Result<()> {
     }
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

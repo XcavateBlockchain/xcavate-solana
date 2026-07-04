@@ -125,4 +125,7 @@ pub enum EducationError {
     /// The no-show grace window past the scheduled delivery has not elapsed.
     #[msg("No-show window has not expired")]
     NoShowWindowNotExpired,
+    /// The scheduled delivery is further out than the allowed window.
+    #[msg("Delivery scheduled too far in the future")]
+    DeliveryTooFar,
 }

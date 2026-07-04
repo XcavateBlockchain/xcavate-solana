@@ -490,6 +490,7 @@ pub fn default_params() -> ConfigParams {
         sponsorship_window: 1_000,
         cancellation_window: 1_000,
         no_show_grace: 1_000,
+        max_delivery_window: i64::MAX,
         max_cancellations: 3,
         max_strikes: 3,
         strike_slash_bps: 1_000,
@@ -788,6 +789,17 @@ pub fn submit_score_ix(
 }
 
 pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
+    finish_ix_by(school, school, module_id, booking_id)
+}
+
+/// Finish a booking with an explicit cranker distinct from the school (the
+/// instruction is permissionless; the deposit and rent still go to the school).
+pub fn finish_ix_by(
+    cranker: &Pubkey,
+    school: &Pubkey,
+    module_id: u64,
+    booking_id: u64,
+) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::FinishBookingProcess {
@@ -796,6 +808,7 @@ pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instructio
         }
         .data(),
         real_x_education::accounts::FinishBooking {
+            cranker: *cranker,
             school: *school,
             config: config_pda(),
             xcav_mint: xcav_mint(),
@@ -804,6 +817,39 @@ pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instructio
             booking: booking_pda(module_id, booking_id),
             booking_escrow: book_escrow_pda(module_id, booking_id),
             sponsorship: sponsorship_pda(module_id, 0),
+            token_program: TOKEN_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+    )
+}
+
+pub fn expire_booking_ix(
+    cranker: &Pubkey,
+    school: &Pubkey,
+    module_id: u64,
+    sponsor_id: u64,
+    booking_id: u64,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ExpireBooking {
+            module_id,
+            booking_id,
+        }
+        .data(),
+        real_x_education::accounts::ExpireBooking {
+            cranker: *cranker,
+            config: config_pda(),
+            module: module_pda(module_id),
+            school: *school,
+            booking: booking_pda(module_id, booking_id),
+            xcav_mint: xcav_mint(),
+            vault: vault(),
+            school_xcav: token_acc(&xcav_mint(), school),
+            payment_mint: usdc_mint(),
+            sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
+            booking_escrow: book_escrow_pda(module_id, booking_id),
+            sponsorship: sponsorship_pda(module_id, sponsor_id),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -1196,11 +1242,7 @@ pub fn regions_default_params() -> education_regions::instructions::ConfigParams
         owner_change_period: 10_000,
         threshold_bps: 5_000,
         quorum: 100_000_000,
-        removal_deposit: 1_000_000_000,
-        removal_voting_period: 1_000,
-        slash_amount: 100_000_000,
         notice_period: 5_000,
-        allowed_strikes: 3,
     }
 }
 
@@ -1350,7 +1392,7 @@ pub fn region_claim_open_ix(
             new_operator_token: token_acc(&xcav_mint(), new_operator),
             vault: regions_vault(),
             region: region_pda(region_id),
-            old_owner_token: token_acc(&xcav_mint(), old_owner),
+            old_owner_token: Some(token_acc(&xcav_mint(), old_owner)),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -1537,7 +1579,6 @@ pub fn setup() -> World {
         region_id: 1,
         owner: operator.pubkey(),
         collateral: 0,
-        active_strikes: 0,
         next_owner_change: 0,
         bump,
     };

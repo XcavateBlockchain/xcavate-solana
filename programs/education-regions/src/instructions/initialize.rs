@@ -15,11 +15,7 @@ pub struct ConfigParams {
     pub owner_change_period: i64,
     pub threshold_bps: u16,
     pub quorum: u64,
-    pub removal_deposit: u64,
-    pub removal_voting_period: i64,
-    pub slash_amount: u64,
     pub notice_period: i64,
-    pub allowed_strikes: u8,
 }
 
 impl ConfigParams {
@@ -37,15 +33,7 @@ impl ConfigParams {
             RegionsError::InvalidConfig
         );
         require!(self.minimum_voting_amount > 0, RegionsError::InvalidConfig);
-        require!(
-            self.removal_deposit > 0 && self.slash_amount > 0,
-            RegionsError::InvalidConfig
-        );
-        require!(
-            self.removal_voting_period > 0 && self.notice_period > 0,
-            RegionsError::InvalidConfig
-        );
-        require!(self.allowed_strikes > 0, RegionsError::InvalidConfig);
+        require!(self.notice_period > 0, RegionsError::InvalidConfig);
         Ok(())
     }
 
@@ -55,11 +43,7 @@ impl ConfigParams {
         config.owner_change_period = self.owner_change_period;
         config.threshold_bps = self.threshold_bps;
         config.quorum = self.quorum;
-        config.removal_deposit = self.removal_deposit;
-        config.removal_voting_period = self.removal_voting_period;
-        config.slash_amount = self.slash_amount;
         config.notice_period = self.notice_period;
-        config.allowed_strikes = self.allowed_strikes;
     }
 }
 
@@ -92,8 +76,8 @@ pub struct InitializeConfig<'info> {
     pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
 
     /// The protocol treasury: a program-owned XCAV account that collects
-    /// slashes (from this program and real-x) and funds proposer rewards.
-    /// Anyone can pay in; only this program can pay out.
+    /// protocol funds (shared with real-x). Anyone can pay in; only this program
+    /// can pay out.
     #[account(
         init,
         payer = authority,
@@ -140,9 +124,9 @@ pub fn handler(ctx: Context<InitializeConfig>, params: ConfigParams) -> Result<(
 }
 
 /// Update the governance parameters. Authority-only. Each proposal snapshots
-/// its deposit and expiry, but threshold, quorum and slash amount are read live
-/// at finalization, so a change reaches proposals already in flight. The mint
-/// and treasury are fixed at initialization.
+/// its deposit and expiry, but threshold and quorum are read live at
+/// finalization, so a change reaches proposals already in flight. The mint and
+/// treasury are fixed at initialization.
 #[derive(Accounts)]
 pub struct UpdateConfig<'info> {
     pub authority: Signer<'info>,
