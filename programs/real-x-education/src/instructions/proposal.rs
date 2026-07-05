@@ -596,18 +596,14 @@ pub fn finalize_proposal_handler(ctx: Context<FinalizeProposal>, proposal_id: u6
     let p = &ctx.accounts.proposal;
     let yes = p.yes_power;
     let no = p.no_power;
-    let total = yes
-        .checked_add(no)
-        .and_then(|v| v.checked_add(p.abstain_power))
-        .ok_or(EducationError::Overflow)?;
     let approval_base = yes.checked_add(no).ok_or(EducationError::Overflow)?;
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
-    // Passing requires real Yes support: abstains count toward quorum but not
-    // toward the approval ratio.
+    // Governor Bravo quorum: only Yes counts, and Yes must clear the ratio over No
+    // (abstains signal only). Set `quorum` high vs any single holder.
     let meets_threshold = yes > 0
         && (yes as u128).saturating_mul(10_000)
             >= (approval_base as u128).saturating_mul(threshold_bps);
-    let meets_quorum = total >= ctx.accounts.config.quorum;
+    let meets_quorum = yes >= ctx.accounts.config.quorum;
     let deposit = p.deposit;
     let decimals = ctx.accounts.xcav_mint.decimals;
     let config_bump = ctx.accounts.config.bump;
@@ -1524,10 +1520,17 @@ pub fn expire_proposal_handler(ctx: Context<ExpireProposal>, proposal_id: u64) -
         EducationError::InvalidProposalState
     );
     let now = Clock::get()?.unix_timestamp;
-    require!(
-        now >= ctx.accounts.proposal.build_deadline,
-        EducationError::BuildDeadlineNotReached
-    );
+    // A claimant reserving late in the window is granted an upload deadline that
+    // can run past the build deadline, so don't slash them until their own
+    // deadline has also passed. `release_claim` already gates on `upload_deadline`;
+    // an unclaimed proposal carries `upload_deadline == 0`, so this reduces to the
+    // build deadline there.
+    let deadline = ctx
+        .accounts
+        .proposal
+        .build_deadline
+        .max(ctx.accounts.proposal.upload_deadline);
+    require!(now >= deadline, EducationError::BuildDeadlineNotReached);
 
     // Settle whatever deposit a claimant still has riding on the build. If the
     // content was uploaded and is still `UnderReview`, the claimant did their part

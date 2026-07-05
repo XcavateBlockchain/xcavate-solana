@@ -124,7 +124,7 @@ pub mod real_x_education {
         claim::claim_booking_handler(ctx, module_id, booking_id)
     }
 
-    /// Submit a student score and settle payment. ModuleAIAgent-only.
+    /// Propose a student score, opening the dispute window. ModuleAIAgent-only.
     pub fn submit_impact_score(
         ctx: Context<SubmitImpactScore>,
         module_id: u64,
@@ -132,6 +132,38 @@ pub mod real_x_education {
         score: u16,
     ) -> Result<()> {
         score::submit_impact_score_handler(ctx, module_id, booking_id, score)
+    }
+
+    /// Dispute a proposed score with an amended one. The booking's school or
+    /// lecturer, within the dispute window.
+    pub fn dispute_score(
+        ctx: Context<DisputeScore>,
+        module_id: u64,
+        booking_id: u64,
+        proposed_score: u16,
+    ) -> Result<()> {
+        score::dispute_score_handler(ctx, module_id, booking_id, proposed_score)
+    }
+
+    /// Accept or reject a disputed amendment. The counterparty (the other of the
+    /// school and lecturer).
+    pub fn resolve_dispute(
+        ctx: Context<ResolveDispute>,
+        module_id: u64,
+        booking_id: u64,
+        accept: bool,
+    ) -> Result<()> {
+        score::resolve_dispute_handler(ctx, module_id, booking_id, accept)
+    }
+
+    /// Finalize a scored booking and settle payment. Permissionless once the
+    /// dispute window lapses; a party can bring it forward.
+    pub fn finalize_score(
+        ctx: Context<FinalizeScore>,
+        module_id: u64,
+        booking_id: u64,
+    ) -> Result<()> {
+        score::finalize_score_handler(ctx, module_id, booking_id)
     }
 
     /// Issue a non-transferable credential for a scored booking.
@@ -169,14 +201,9 @@ pub mod real_x_education {
         cancel::cancel_claim_handler(ctx, module_id, booking_id)
     }
 
-    /// Expire a no-show lecturer's claim once the delivery grace window passes,
-    /// striking them and freeing the token. Permissionless.
-    pub fn expire_claim(ctx: Context<ExpireClaim>, module_id: u64, booking_id: u64) -> Result<()> {
-        cancel::expire_claim_handler(ctx, module_id, booking_id)
-    }
-
-    /// Expire an unclaimed booking once the delivery grace window passes,
-    /// refunding the sponsor and the school. Permissionless.
+    /// Expire a booking that was never scored once the delivery grace window
+    /// passes: refund the sponsor and school, and free any claim without a
+    /// strike. Permissionless.
     pub fn expire_booking(
         ctx: Context<ExpireBooking>,
         module_id: u64,

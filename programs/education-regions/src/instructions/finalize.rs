@@ -86,20 +86,15 @@ pub fn finalize_region_proposal_handler(
     let proposal = &ctx.accounts.proposal;
     let yes = proposal.yes_power;
     let no = proposal.no_power;
-    let abstain = proposal.abstain_power;
-    let total = yes
-        .checked_add(no)
-        .and_then(|v| v.checked_add(abstain))
-        .ok_or(RegionsError::Overflow)?;
     let approval_base = yes.checked_add(no).ok_or(RegionsError::Overflow)?;
 
     let threshold_bps = ctx.accounts.config.threshold_bps as u128;
-    // Passing requires real Yes support: abstains count toward quorum but not
-    // toward the approval ratio.
+    // Governor Bravo quorum: only Yes counts, and Yes must clear the ratio over No
+    // (abstains signal only). Set `quorum` high vs any single holder.
     let meets_threshold = yes > 0
         && (yes as u128).saturating_mul(10_000)
             >= (approval_base as u128).saturating_mul(threshold_bps);
-    let meets_quorum = total >= ctx.accounts.config.quorum;
+    let meets_quorum = yes >= ctx.accounts.config.quorum;
     let proposal_id = proposal.proposal_id;
     let deposit = ctx.accounts.region_state.deposit;
 

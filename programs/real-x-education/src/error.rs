@@ -128,4 +128,22 @@ pub enum EducationError {
     /// The scheduled delivery is further out than the allowed window.
     #[msg("Delivery scheduled too far in the future")]
     DeliveryTooFar,
+    /// The booking's payment has already been released.
+    #[msg("Booking is already settled")]
+    AlreadySettled,
+    /// Finalize was called while the dispute window is still open.
+    #[msg("Dispute window is still open")]
+    DisputeWindowOpen,
+    /// A dispute was raised after the dispute window had closed.
+    #[msg("Dispute window has closed")]
+    DisputeWindowClosed,
+    /// A dispute has already been raised on this booking.
+    #[msg("Dispute already raised")]
+    DisputeAlreadyRaised,
+    /// Finalize was blocked because an amendment is still awaiting a decision.
+    #[msg("A disputed amendment is still pending")]
+    DisputePending,
+    /// There is no pending dispute to resolve.
+    #[msg("No pending dispute")]
+    NoDispute,
 }

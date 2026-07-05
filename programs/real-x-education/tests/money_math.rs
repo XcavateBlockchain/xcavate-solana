@@ -77,22 +77,18 @@ fn usdc_partial_score_split_exact() {
     let spon_before = balance(&w.svm, &usdc_mint(), &c.sponsor.pubkey());
 
     // 75% score, above the 50% threshold. base 100e6, fees 8.3/8.3/5/3.4e6.
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &c.agent.pubkey(),
-            0,
-            0,
-            7_500,
-            1,
-            &c.creator.pubkey(),
-            &operator,
-            &protocol,
-            &c.lecturer.pubkey(),
-            &c.sponsor.pubkey(),
-        ),
         &c.agent,
-        &[&c.agent],
+        0,
+        0,
+        7_500,
+        1,
+        &c.creator.pubkey(),
+        &operator,
+        &protocol,
+        &c.lecturer.pubkey(),
+        &c.sponsor.pubkey(),
     );
 
     let cc = balance(&w.svm, &usdc_mint(), &c.creator.pubkey()) - cre_before;
@@ -158,22 +154,18 @@ fn score_at_threshold_boundary_pays() {
     let spon_before = balance(&w.svm, &usdc_mint(), &c.sponsor.pubkey());
 
     // Exactly at the 50% threshold: the branch is `>=`, so it pays out.
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &c.agent.pubkey(),
-            0,
-            0,
-            5_000,
-            1,
-            &c.creator.pubkey(),
-            &operator,
-            &protocol,
-            &c.lecturer.pubkey(),
-            &c.sponsor.pubkey(),
-        ),
         &c.agent,
-        &[&c.agent],
+        0,
+        0,
+        5_000,
+        1,
+        &c.creator.pubkey(),
+        &operator,
+        &protocol,
+        &c.lecturer.pubkey(),
+        &c.sponsor.pubkey(),
     );
 
     let cc = balance(&w.svm, &usdc_mint(), &c.creator.pubkey()) - cre_before;
@@ -233,22 +225,18 @@ fn score_zero_refunds_full_no_strike() {
 
     // Score 0 is below threshold: nobody is paid, the escrow is refunded in
     // full, the token is burned, and no strike is recorded.
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &c.agent.pubkey(),
-            0,
-            0,
-            0,
-            1,
-            &c.creator.pubkey(),
-            &operator,
-            &protocol,
-            &c.lecturer.pubkey(),
-            &c.sponsor.pubkey(),
-        ),
         &c.agent,
-        &[&c.agent],
+        0,
+        0,
+        0,
+        1,
+        &c.creator.pubkey(),
+        &operator,
+        &protocol,
+        &c.lecturer.pubkey(),
+        &c.sponsor.pubkey(),
     );
 
     assert_eq!(
@@ -313,23 +301,19 @@ fn gbp_full_score_reconciles_escrow() {
     let lec_before = balance(&w.svm, &gbp_mint(), &c.lecturer.pubkey());
     let spon_before = balance(&w.svm, &gbp_mint(), &c.sponsor.pubkey());
 
-    ok(
+    settle_score_asset(
         &mut w.svm,
-        submit_score_asset_ix(
-            &c.agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &c.creator.pubkey(),
-            &operator,
-            &protocol,
-            &c.lecturer.pubkey(),
-            &c.sponsor.pubkey(),
-            &gbp_mint(),
-        ),
         &c.agent,
-        &[&c.agent],
+        0,
+        0,
+        10_000,
+        1,
+        &c.creator.pubkey(),
+        &operator,
+        &protocol,
+        &c.lecturer.pubkey(),
+        &c.sponsor.pubkey(),
+        &gbp_mint(),
     );
 
     let cc = balance(&w.svm, &gbp_mint(), &c.creator.pubkey()) - cre_before;
@@ -393,23 +377,19 @@ fn gbp_partial_score_floor_precision() {
     let spon_before = balance(&w.svm, &gbp_mint(), &c.sponsor.pubkey());
 
     // 77.77% score at only 2 decimals, so each floor truncates a fraction.
-    ok(
+    settle_score_asset(
         &mut w.svm,
-        submit_score_asset_ix(
-            &c.agent.pubkey(),
-            0,
-            0,
-            7_777,
-            1,
-            &c.creator.pubkey(),
-            &operator,
-            &protocol,
-            &c.lecturer.pubkey(),
-            &c.sponsor.pubkey(),
-            &gbp_mint(),
-        ),
         &c.agent,
-        &[&c.agent],
+        0,
+        0,
+        7_777,
+        1,
+        &c.creator.pubkey(),
+        &operator,
+        &protocol,
+        &c.lecturer.pubkey(),
+        &c.sponsor.pubkey(),
+        &gbp_mint(),
     );
 
     let cc = balance(&w.svm, &gbp_mint(), &c.creator.pubkey()) - cre_before;

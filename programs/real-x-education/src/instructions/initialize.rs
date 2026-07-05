@@ -30,6 +30,7 @@ pub struct ConfigParams {
     pub cancellation_window: i64,
     pub no_show_grace: i64,
     pub max_delivery_window: i64,
+    pub dispute_window: i64,
     pub max_cancellations: u32,
     pub max_strikes: u8,
     pub strike_slash_bps: u16,
@@ -71,6 +72,9 @@ impl ConfigParams {
                 && self.upload_period > 0,
             EducationError::InvalidConfig
         );
+        // A zero dispute window is valid (it means finalize immediately), but a
+        // negative one is nonsensical.
+        require!(self.dispute_window >= 0, EducationError::InvalidConfig);
         require!(self.module_price > 0, EducationError::InvalidConfig);
         require!(self.max_module_tokens > 0, EducationError::InvalidConfig);
         require!(
@@ -108,6 +112,7 @@ impl ConfigParams {
         config.cancellation_window = self.cancellation_window;
         config.no_show_grace = self.no_show_grace;
         config.max_delivery_window = self.max_delivery_window;
+        config.dispute_window = self.dispute_window;
         config.max_cancellations = self.max_cancellations;
         config.max_strikes = self.max_strikes;
         config.strike_slash_bps = self.strike_slash_bps;

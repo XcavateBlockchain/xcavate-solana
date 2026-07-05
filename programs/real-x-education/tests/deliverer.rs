@@ -317,22 +317,18 @@ fn strike_reduced_after_n_deliveries() {
         &lecturer,
         &[&lecturer],
     );
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     let d = deliverer_of(&w.svm, &lecturer.pubkey());

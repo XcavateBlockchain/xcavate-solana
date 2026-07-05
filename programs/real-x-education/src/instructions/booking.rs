@@ -203,6 +203,10 @@ pub fn book_module_handler(
     booking.payment_asset = payment_asset;
     booking.price_per_token = per_token;
     booking.score = None;
+    booking.score_at = None;
+    booking.settled = false;
+    booking.disputer = None;
+    booking.proposed_score = None;
     booking.deposit = deposit;
     booking.booked_at = clock.unix_timestamp;
     booking.delivery_at = delivery_at;
@@ -224,8 +228,8 @@ pub fn book_module_handler(
     Ok(())
 }
 
-/// Release the school's deposit and close a booking once it has been scored.
-/// ModuleBooker-only and limited to the booking's own school.
+/// Release the school's deposit and close a booking once it has settled.
+/// Permissionless; the deposit and rent always return to the booking's school.
 #[derive(Accounts)]
 #[instruction(module_id: u64, booking_id: u64)]
 pub struct FinishBooking<'info> {
@@ -233,7 +237,7 @@ pub struct FinishBooking<'info> {
     pub cranker: Signer<'info>,
 
     /// CHECK: pinned to the booking's school by the `booking.school` constraint
-    /// below; not a signer, so anyone can settle a scored booking.
+    /// below; not a signer, so anyone can settle a finalized booking.
     #[account(mut)]
     pub school: UncheckedAccount<'info>,
 
@@ -268,7 +272,7 @@ pub struct FinishBooking<'info> {
     )]
     pub booking: Box<Account<'info, Booking>>,
 
-    /// The booking's payment escrow, drained when the score landed. Closed here
+    /// The booking's payment escrow, drained when the score was finalized. Closed here
     /// so its rent goes back to the school that opened it.
     #[account(
         mut,
@@ -296,7 +300,7 @@ pub fn finish_booking_handler(
     _booking_id: u64,
 ) -> Result<()> {
     require!(
-        ctx.accounts.booking.score.is_some(),
+        ctx.accounts.booking.settled,
         EducationError::NoTestResultsSubmitted
     );
 
@@ -318,11 +322,8 @@ pub fn finish_booking_handler(
         ctx.accounts.xcav_mint.decimals,
     )?;
 
-    // The escrow was drained by the payout, so close it to return its rent to the
-    // school alongside the closed booking record, but only if it is actually
-    // empty. A stray transfer into the account after settlement would make the SPL
-    // close fail and revert the whole instruction, so any residual balance leaves
-    // the escrow behind while the deposit release still stands.
+    // Close the now-empty escrow to return its rent to the school; a stray
+    // transfer leaves it behind rather than reverting the settlement.
     ctx.accounts.booking_escrow.reload()?;
     if ctx.accounts.booking_escrow.amount == 0 {
         close_vault_account(

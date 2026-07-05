@@ -796,6 +796,74 @@ fn expire_refunds_uploaded_claimant() {
     assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
 }
 
+// A creator who reserves late in the claim window is granted an upload deadline
+// that runs past the build deadline. Expiry must wait for that upload deadline,
+// not slash their bond the instant the build deadline passes.
+#[test]
+fn expire_waits_for_a_late_claimants_upload_window() {
+    let mut w = setup();
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+
+    ok(
+        &mut w.svm,
+        create_proposal_ix(&school.pubkey(), Role::ModuleBooker, 1, 0, 10),
+        &school,
+        &[&school],
+    );
+    ok(
+        &mut w.svm,
+        vote_ix(&voter.pubkey(), 0, ModuleVote::Yes, 10_000),
+        &voter,
+        &[&voter],
+    );
+    warp_past_voting(&mut w.svm);
+    ok(
+        &mut w.svm,
+        finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    // Reserve late in the claim window, so the granted upload deadline runs past
+    // the build deadline (claim_period == upload_period == 1_000 by default).
+    warp(&mut w.svm, 900);
+    ok(
+        &mut w.svm,
+        claim_proposal_ix(&creator.pubkey(), 0),
+        &creator,
+        &[&creator],
+    );
+    let p = proposal_of(&w.svm, 0);
+    assert!(p.upload_deadline > p.build_deadline);
+
+    // Past the build deadline but still inside the claimant's own upload window:
+    // expiry must not slash them yet.
+    warp(&mut w.svm, 200);
+    assert!(now_ts(&w.svm) > p.build_deadline && now_ts(&w.svm) < p.upload_deadline);
+    err(
+        &mut w.svm,
+        expire_proposal_ix(&cranker.pubkey(), 0),
+        &cranker,
+        &[&cranker],
+        "BuildDeadlineNotReached",
+    );
+
+    // Once their own upload deadline lapses, expiry slashes the unbuilt bond.
+    let treasury_before = treasury_balance(&w.svm);
+    warp(&mut w.svm, 1_000);
+    ok(
+        &mut w.svm,
+        expire_proposal_ix(&cranker.pubkey(), 0),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(treasury_balance(&w.svm) - treasury_before, MODULE_DEPOSIT);
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
+}
+
 // An all-abstain proposal clears quorum but has no Yes support, so it
 // must be rejected rather than pass on `0 >= 0`.
 #[test]
@@ -816,6 +884,47 @@ fn proposal_all_abstain_is_rejected() {
         vote_ix(&voter.pubkey(), 0, ModuleVote::Abstain, 10_000),
         &voter,
         &[&voter],
+    );
+    warp_past_voting(&mut w.svm);
+    ok(
+        &mut w.svm,
+        finalize_proposal_ix(&cranker.pubkey(), 0, &school.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+
+    assert_eq!(proposal_of(&w.svm, 0).status, ProposalStatus::Rejected);
+}
+
+// Only Yes power counts toward quorum (Governor Bravo style). A small Yes padded
+// with a large Abstain reaches the old yes+no+abstain total but must not pass:
+// abstains can't drag a weakly-supported proposal over quorum.
+#[test]
+fn abstain_padding_cannot_reach_quorum() {
+    let mut w = setup();
+    let school = with_role(&mut w, Role::ModuleBooker);
+    let yes_voter = actor(&mut w.svm);
+    let abstain_voter = actor(&mut w.svm);
+    let cranker = funded(&mut w.svm);
+
+    ok(
+        &mut w.svm,
+        create_proposal_ix(&school.pubkey(), Role::ModuleBooker, 1, 0, 10),
+        &school,
+        &[&school],
+    );
+    // Yes is below quorum (10_000); abstain would top the old total past it.
+    ok(
+        &mut w.svm,
+        vote_ix(&yes_voter.pubkey(), 0, ModuleVote::Yes, 1_000),
+        &yes_voter,
+        &[&yes_voter],
+    );
+    ok(
+        &mut w.svm,
+        vote_ix(&abstain_voter.pubkey(), 0, ModuleVote::Abstain, 9_000),
+        &abstain_voter,
+        &[&abstain_voter],
     );
     warp_past_voting(&mut w.svm);
     ok(

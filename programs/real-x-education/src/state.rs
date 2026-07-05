@@ -52,6 +52,9 @@ pub struct Config {
     /// Furthest ahead (seconds) a booking's delivery may be scheduled, so an
     /// unclaimed booking can't strand the sponsor's escrow indefinitely.
     pub max_delivery_window: i64,
+    /// How long (seconds) after the agent proposes a score the school or lecturer
+    /// has to dispute it before anyone can finalize the payment.
+    pub dispute_window: i64,
 
     /// School cancellations within the window before its deposit is slashed.
     pub max_cancellations: u32,
@@ -166,8 +169,14 @@ pub struct Sponsorship {
 }
 
 /// A school's booking of one module token. The per-token payment sits in the
-/// booking escrow until a score is submitted (paid out and refunded) or the
+/// booking escrow until the delivery settles (paid out and refunded) or the
 /// booking is cancelled (returned to the sponsor).
+///
+/// Scoring is two-phase. The AI agent first proposes a score, which opens a
+/// dispute window. During the window the school or the lecturer may dispute it
+/// with an amended score that only takes effect if the other party accepts;
+/// otherwise the agent's score stands. Once the window lapses (or either party
+/// confirms early) anyone can finalize the booking and release the payment.
 #[account]
 #[derive(InitSpace)]
 pub struct Booking {
@@ -181,8 +190,19 @@ pub struct Booking {
     pub payment_asset: Pubkey,
     /// Payment escrowed for this booking, in `payment_asset` units.
     pub price_per_token: u64,
-    /// Student score in basis points, once submitted.
+    /// The effective student score in basis points, once the agent has proposed
+    /// one. An accepted dispute overwrites it with the amended value.
     pub score: Option<u16>,
+    /// When the agent proposed the score; anchors the dispute window.
+    pub score_at: Option<i64>,
+    /// Set once the payment has been released, so a booking settles only once.
+    pub settled: bool,
+    /// The party (school or lecturer) that opened the one allowed dispute. Stays
+    /// set after the dispute concludes so it can't be reopened.
+    pub disputer: Option<Pubkey>,
+    /// The amended score awaiting the counterparty's decision. Cleared back to
+    /// `None` once they accept it (score updated) or reject it (agent's stands).
+    pub proposed_score: Option<u16>,
     /// XCAV deposit held from the school.
     pub deposit: u64,
     pub booked_at: i64,

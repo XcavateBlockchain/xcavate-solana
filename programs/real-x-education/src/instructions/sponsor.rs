@@ -337,13 +337,18 @@ pub fn close_sponsorship_handler(
         EducationError::SponsorshipNotEmpty
     );
 
-    close_vault_account(
-        &ctx.accounts.token_program.to_account_info(),
-        &ctx.accounts.sponsor_escrow.to_account_info(),
-        &ctx.accounts.sponsor.to_account_info(),
-        &ctx.accounts.config.to_account_info(),
-        ctx.accounts.config.bump,
-    )?;
+    // Close the now-empty escrow to return its rent; a stray transfer leaves it
+    // behind rather than reverting (and stranding the sponsorship rent too).
+    ctx.accounts.sponsor_escrow.reload()?;
+    if ctx.accounts.sponsor_escrow.amount == 0 {
+        close_vault_account(
+            &ctx.accounts.token_program.to_account_info(),
+            &ctx.accounts.sponsor_escrow.to_account_info(),
+            &ctx.accounts.sponsor.to_account_info(),
+            &ctx.accounts.config.to_account_info(),
+            ctx.accounts.config.bump,
+        )?;
+    }
 
     emit!(SponsorshipClosed {
         module_id: ctx.accounts.sponsorship.module_id,

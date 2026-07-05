@@ -58,22 +58,18 @@ fn full_flow_through_score_works() {
     let proto_before = balance(&w.svm, &usdc_mint(), &protocol);
     let lec_before = balance(&w.svm, &usdc_mint(), &lecturer.pubkey());
 
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     // Full score: creator 8.3%, operator 8.3%, protocol 5%, lecturer base+dbs.
@@ -164,22 +160,18 @@ fn cancel_claim_rejected_after_score() {
         &lecturer,
         &[&lecturer],
     );
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     // The booking is settled: cancelling the (already scored) claim must be
@@ -351,22 +343,18 @@ fn score_below_threshold_refunds_sponsor() {
     let sponsor_before = balance(&w.svm, &usdc_mint(), &sponsor.pubkey());
     // A score below the 50% threshold: the token is burned but nobody is paid,
     // and the escrowed payment is refunded to the sponsor.
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            4_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        4_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     assert_eq!(balance(&w.svm, &usdc_mint(), &creator.pubkey()), cre_before);
@@ -387,8 +375,6 @@ fn submit_score_out_of_range_fails() {
     let school = with_role(&mut w, Role::ModuleBooker);
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
     let agent = with_role(&mut w, Role::ModuleAIAgent);
-    let operator = w.operator.pubkey();
-    let protocol = w.protocol.pubkey();
 
     ok(
         &mut w.svm,
@@ -426,18 +412,7 @@ fn submit_score_out_of_range_fails() {
 
     err(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_001,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_001),
         &agent,
         &[&agent],
         "InvalidScore",
@@ -488,22 +463,18 @@ fn mint_credential_works() {
         &lecturer,
         &[&lecturer],
     );
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            8_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        8_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     // A student credential carries the booking's score.
@@ -931,18 +902,7 @@ fn score_before_delivery_time_fails() {
     // Too early: the session hasn't happened yet.
     err(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000),
         &agent,
         &[&agent],
         "DeliveryNotReached",
@@ -950,22 +910,18 @@ fn score_before_delivery_time_fails() {
 
     // Once the delivery time passes, scoring settles.
     warp(&mut w.svm, 10_001);
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
     assert_eq!(booking_of(&w.svm, 0, 0).score, Some(10_000));
 }
@@ -974,7 +930,7 @@ fn score_before_delivery_time_fails() {
 // once the no-show grace window past the delivery time elapses, without charging
 // the school a cancellation.
 #[test]
-fn expire_claim_strikes_noshow_lecturer() {
+fn expire_booking_frees_a_claimed_booking_without_strike() {
     let mut w = setup();
     let creator = with_role(&mut w, Role::ModuleCreator);
     let sponsor = with_role(&mut w, Role::ModuleSponsor);
@@ -993,7 +949,8 @@ fn expire_claim_strikes_noshow_lecturer() {
         &sponsor,
         &[&sponsor],
     );
-    let d = now_ts(&w.svm);
+    let school_before = balance(&w.svm, &xcav_mint(), &school.pubkey());
+    let d = now_ts(&w.svm) + 1_000;
     ok(
         &mut w.svm,
         book_ix_at(&school.pubkey(), 0, 0, 0, d),
@@ -1013,31 +970,54 @@ fn expire_claim_strikes_noshow_lecturer() {
         &[&lecturer],
     );
 
-    // A third party cranks the expiry; before the grace window it's rejected.
+    // Before the grace window it's rejected.
     let cranker = funded(&mut w.svm);
     err(
         &mut w.svm,
-        expire_claim_ix(&cranker.pubkey(), &lecturer.pubkey(), 0, 0),
+        expire_booking_ix(
+            &cranker.pubkey(),
+            &school.pubkey(),
+            0,
+            0,
+            0,
+            Some(&lecturer.pubkey()),
+        ),
         &cranker,
         &[&cranker],
         "NoShowWindowNotExpired",
     );
 
-    // Past delivery + no_show_grace, anyone can strike the no-show lecturer.
-    warp(&mut w.svm, 2_000);
+    // Past delivery + no_show_grace, anyone can expire it. The agent never
+    // scored, so the lecturer's claim is freed with no strike and everyone is
+    // made whole; the chain can't tell a delivered-but-unscored session from a
+    // no-show, so it punishes neither.
+    warp(&mut w.svm, 2_100);
     ok(
         &mut w.svm,
-        expire_claim_ix(&cranker.pubkey(), &lecturer.pubkey(), 0, 0),
+        expire_booking_ix(
+            &cranker.pubkey(),
+            &school.pubkey(),
+            0,
+            0,
+            0,
+            Some(&lecturer.pubkey()),
+        ),
         &cranker,
         &[&cranker],
     );
 
     let del = deliverer_of(&w.svm, &lecturer.pubkey());
-    assert_eq!(del.active_strikes, 1);
+    assert_eq!(del.active_strikes, 0);
     assert_eq!(del.active_claims, 0);
-    assert!(booking_of(&w.svm, 0, 0).lecturer.is_none());
-    // The token is free to claim again.
-    assert_eq!(module_of(&w.svm, 0).student_allocation, 1);
+    // Sponsor and school both refunded, booking closed, token bookable again.
+    assert_eq!(sponsorship_of(&w.svm, 0, 0).amount, 1);
+    assert_eq!(sponsorship_of(&w.svm, 0, 0).active_bookings, 0);
+    assert_eq!(module_of(&w.svm, 0).school_allocation, 1);
+    assert_eq!(
+        balance(&w.svm, &xcav_mint(), &school.pubkey()),
+        school_before
+    );
+    assert!(closed(&w.svm, &booking_pda(0, 0)));
     // The school was never charged a cancellation.
     assert!(w.svm.get_account(&counter_pda(&school.pubkey())).is_none());
 }
@@ -1121,7 +1101,7 @@ fn expire_booking_recovers_stale_unclaimed_booking() {
     let cranker = funded(&mut w.svm);
     err(
         &mut w.svm,
-        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0),
+        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0, None),
         &cranker,
         &[&cranker],
         "NoShowWindowNotExpired",
@@ -1131,7 +1111,7 @@ fn expire_booking_recovers_stale_unclaimed_booking() {
     warp(&mut w.svm, 2_100);
     ok(
         &mut w.svm,
-        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0),
+        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0, None),
         &cranker,
         &[&cranker],
     );
@@ -1152,58 +1132,6 @@ fn expire_booking_recovers_stale_unclaimed_booking() {
     assert_eq!(module_of(&w.svm, 0).school_allocation, 2);
     assert!(closed(&w.svm, &booking_pda(0, 0)));
     assert!(closed(&w.svm, &book_escrow_pda(0, 0)));
-}
-
-#[test]
-fn expire_booking_rejects_a_claimed_booking() {
-    let mut w = setup();
-    let creator = with_role(&mut w, Role::ModuleCreator);
-    let sponsor = with_role(&mut w, Role::ModuleSponsor);
-    let school = with_role(&mut w, Role::ModuleBooker);
-    let lecturer = with_role(&mut w, Role::ModuleDeliverer);
-
-    ok(
-        &mut w.svm,
-        create_module_ix(&creator.pubkey(), 1, 0, 10),
-        &creator,
-        &[&creator],
-    );
-    ok(
-        &mut w.svm,
-        sponsor_ix(&sponsor.pubkey(), 0, 0, 1),
-        &sponsor,
-        &[&sponsor],
-    );
-    let delivery = now_ts(&w.svm) + 1_000;
-    ok(
-        &mut w.svm,
-        book_ix_at(&school.pubkey(), 0, 0, 0, delivery),
-        &school,
-        &[&school],
-    );
-    ok(
-        &mut w.svm,
-        register_deliverer_ix(&lecturer.pubkey()),
-        &lecturer,
-        &[&lecturer],
-    );
-    ok(
-        &mut w.svm,
-        claim_ix(&lecturer.pubkey(), 0, 0),
-        &lecturer,
-        &[&lecturer],
-    );
-
-    // A claimed booking belongs to expire_claim, not expire_booking.
-    warp(&mut w.svm, 2_100);
-    let cranker = funded(&mut w.svm);
-    err(
-        &mut w.svm,
-        expire_booking_ix(&cranker.pubkey(), &school.pubkey(), 0, 0, 0),
-        &cranker,
-        &[&cranker],
-        "LecturerAlreadySet",
-    );
 }
 
 #[test]
@@ -1248,22 +1176,18 @@ fn finish_booking_is_permissionless() {
         &lecturer,
         &[&lecturer],
     );
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &w.operator.pubkey(),
-            &w.protocol.pubkey(),
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &w.operator.pubkey(),
+        &w.protocol.pubkey(),
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     // A stranger with no role finishes the scored booking; the deposit still

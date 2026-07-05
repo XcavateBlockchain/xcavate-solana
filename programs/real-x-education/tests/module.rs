@@ -181,6 +181,50 @@ fn close_sponsorship_after_reclaim_works() {
     );
 }
 
+// A stray transfer into the drained escrow must not brick the close: the SPL
+// close would revert on a non-zero balance, so the escrow is left behind on dust
+// while the sponsorship record still closes and returns its rent.
+#[test]
+fn close_sponsorship_survives_dusting() {
+    let mut w = setup();
+    let creator = with_role(&mut w, Role::ModuleCreator);
+    let sponsor = with_role(&mut w, Role::ModuleSponsor);
+
+    ok(
+        &mut w.svm,
+        create_module_ix(&creator.pubkey(), 1, 0, 10),
+        &creator,
+        &[&creator],
+    );
+    ok(
+        &mut w.svm,
+        sponsor_ix(&sponsor.pubkey(), 0, 0, 1),
+        &sponsor,
+        &[&sponsor],
+    );
+    warp_past_voting(&mut w.svm);
+    ok(
+        &mut w.svm,
+        reclaim_sponsorship_ix(&sponsor.pubkey(), 0, 0, 1),
+        &sponsor,
+        &[&sponsor],
+    );
+
+    // Dust the emptied escrow, then close: the instruction must still succeed.
+    dust(&mut w.svm, &sponsor_escrow_pda(0, 0), 1);
+    ok(
+        &mut w.svm,
+        close_sponsorship_ix(&sponsor.pubkey(), 0, 0),
+        &sponsor,
+        &[&sponsor],
+    );
+
+    // The sponsorship record is closed (rent recovered); the dusted escrow is
+    // left behind rather than reverting the whole close.
+    assert!(closed(&w.svm, &sponsorship_pda(0, 0)));
+    assert_eq!(spl_amount(&w.svm, &sponsor_escrow_pda(0, 0)), 1);
+}
+
 #[test]
 fn create_module_fails() {
     let mut w = setup();

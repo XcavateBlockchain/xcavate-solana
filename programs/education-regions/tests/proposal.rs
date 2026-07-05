@@ -490,6 +490,55 @@ fn finalize_all_abstain_is_rejected() {
     assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
 }
 
+// Only Yes power counts toward quorum (Governor Bravo style), so an operator
+// can't self-approve a region by padding a small Yes with a large Abstain.
+#[test]
+fn abstain_padding_cannot_reach_quorum() {
+    let (mut svm, operator, authority) = setup();
+    // Raise quorum above the voting minimum so a below-quorum Yes is castable.
+    let mut params = default_params();
+    params.quorum = 300_000_000;
+    ok(
+        &mut svm,
+        update_config_ix(&authority.pubkey(), params),
+        &authority,
+        &[&authority],
+    );
+
+    let id = next_proposal_id(&svm);
+    ok(
+        &mut svm,
+        propose_ix(&operator.pubkey(), 1, id),
+        &operator,
+        &[&operator],
+    );
+
+    // Yes is below quorum; the abstain would top the old yes+no+abstain total.
+    let yes_voter = actor(&mut svm);
+    let abstain_voter = actor(&mut svm);
+    ok(
+        &mut svm,
+        vote_ix(&yes_voter.pubkey(), 1, id, Vote::Yes, 100_000_000),
+        &yes_voter,
+        &[&yes_voter],
+    );
+    ok(
+        &mut svm,
+        vote_ix(&abstain_voter.pubkey(), 1, id, Vote::Abstain, 300_000_000),
+        &abstain_voter,
+        &[&abstain_voter],
+    );
+    warp_past_voting(&mut svm);
+    let cranker = funded(&mut svm);
+    ok(
+        &mut svm,
+        finalize_ix(&cranker.pubkey(), 1, id, &operator.pubkey()),
+        &cranker,
+        &[&cranker],
+    );
+    assert_eq!(region_state_of(&svm, 1).status, RegionStatus::Rejected);
+}
+
 #[test]
 fn finalize_exact_threshold_passes() {
     let (mut svm, operator, _authority) = setup();

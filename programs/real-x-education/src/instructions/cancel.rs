@@ -233,11 +233,8 @@ pub fn cancel_booking_handler(
     cancellation.created_at = clock.unix_timestamp;
     cancellation.bump = ctx.bumps.cancellation;
 
-    // The booking escrow was drained back to the sponsor, so close it to return
-    // its rent to the school alongside the closed booking record, but only if it
-    // is actually empty. A stray transfer into the account would make the SPL
-    // close fail and revert the whole cancellation, so any residual balance leaves
-    // the escrow behind while the deposit refund still stands.
+    // Close the now-empty escrow to return its rent to the school; a stray
+    // transfer leaves it behind rather than reverting the cancellation.
     ctx.accounts.booking_escrow.reload()?;
     if ctx.accounts.booking_escrow.amount == 0 {
         close_vault_account(
@@ -451,163 +448,10 @@ pub fn cancel_claim_handler(
     Ok(())
 }
 
-/// Expire a claimed booking whose lecturer never delivered. Permissionless once
-/// the no-show grace window past the scheduled delivery has passed and no score
-/// landed. Strikes the absent lecturer (slashing at the ceiling) and frees the
-/// token to be claimed again. It leaves the school's cancellation count
-/// untouched, so the no-show is charged to the party at fault rather than the
-/// victim.
-#[derive(Accounts)]
-#[instruction(module_id: u64, booking_id: u64)]
-pub struct ExpireClaim<'info> {
-    #[account(mut)]
-    pub cranker: Signer<'info>,
-
-    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
-    pub config: Box<Account<'info, Config>>,
-
-    #[account(
-        mut,
-        seeds = [MODULE_SEED, &module_id.to_le_bytes()],
-        bump = module.bump,
-    )]
-    pub module: Box<Account<'info, Module>>,
-
-    /// CHECK: the lecturer who claimed the booking. Used to derive the deliverer
-    /// PDA and checked against `booking.lecturer` in the handler.
-    pub lecturer: UncheckedAccount<'info>,
-
-    #[account(
-        mut,
-        seeds = [DELIVERER_SEED, lecturer.key().as_ref()],
-        bump = deliverer.bump,
-    )]
-    pub deliverer: Box<Account<'info, Deliverer>>,
-
-    #[account(
-        mut,
-        seeds = [BOOKING_SEED, &module_id.to_le_bytes(), &booking_id.to_le_bytes()],
-        bump = booking.bump,
-    )]
-    pub booking: Box<Account<'info, Booking>>,
-
-    #[account(address = config.xcav_mint @ EducationError::InvalidMint)]
-    pub xcav_mint: Box<InterfaceAccount<'info, Mint>>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_SEED],
-        bump,
-        token::mint = config.xcav_mint,
-        token::authority = config,
-    )]
-    pub vault: Box<InterfaceAccount<'info, TokenAccount>>,
-
-    #[account(mut, address = config.treasury @ EducationError::InvalidTreasury)]
-    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
-
-    pub token_program: Interface<'info, TokenInterface>,
-}
-
-pub fn expire_claim_handler(
-    ctx: Context<ExpireClaim>,
-    module_id: u64,
-    booking_id: u64,
-) -> Result<()> {
-    let lecturer = ctx
-        .accounts
-        .booking
-        .lecturer
-        .ok_or(EducationError::NoLecturerSet)?;
-    // The supplied lecturer account (which seeds the deliverer PDA to strike)
-    // must be the one that claimed the booking.
-    require!(
-        lecturer == ctx.accounts.lecturer.key(),
-        EducationError::NoPermission
-    );
-    require!(
-        ctx.accounts.booking.score.is_none(),
-        EducationError::ScoreAlreadySet
-    );
-
-    // The no-show grace window past the scheduled delivery must have elapsed.
-    let now = Clock::get()?.unix_timestamp;
-    let deadline = ctx
-        .accounts
-        .booking
-        .delivery_at
-        .saturating_add(ctx.accounts.config.no_show_grace);
-    require!(now > deadline, EducationError::NoShowWindowNotExpired);
-
-    // Strike the lecturer, slashing the deposit once the ceiling is hit (mirrors
-    // cancel_claim, which the lecturer would call on themselves).
-    let strikes = ctx
-        .accounts
-        .deliverer
-        .active_strikes
-        .checked_add(1)
-        .ok_or(EducationError::Overflow)?;
-
-    if strikes >= ctx.accounts.config.max_strikes {
-        let slash_full = u64::try_from(fee_ceil(
-            ctx.accounts.config.deliverer_deposit as u128,
-            ctx.accounts.config.strike_slash_bps,
-        )?)
-        .map_err(|_| EducationError::Overflow)?;
-        let slash = slash_full.min(ctx.accounts.deliverer.deposit);
-        if slash > 0 {
-            release_from_vault(
-                &ctx.accounts.token_program.to_account_info(),
-                &ctx.accounts.vault.to_account_info(),
-                &ctx.accounts.xcav_mint.to_account_info(),
-                &ctx.accounts.treasury.to_account_info(),
-                &ctx.accounts.config.to_account_info(),
-                ctx.accounts.config.bump,
-                slash,
-                ctx.accounts.xcav_mint.decimals,
-            )?;
-            ctx.accounts.deliverer.deposit = ctx
-                .accounts
-                .deliverer
-                .deposit
-                .checked_sub(slash)
-                .ok_or(EducationError::Underflow)?;
-        }
-    }
-
-    let booking = &mut ctx.accounts.booking;
-    booking.lecturer = None;
-    booking.claimed_at = None;
-
-    let deliverer = &mut ctx.accounts.deliverer;
-    deliverer.active_strikes = strikes;
-    deliverer.active_claims = deliverer
-        .active_claims
-        .checked_sub(1)
-        .ok_or(EducationError::Underflow)?;
-
-    ctx.accounts.module.student_allocation = ctx
-        .accounts
-        .module
-        .student_allocation
-        .checked_add(1)
-        .ok_or(EducationError::Overflow)?;
-
-    emit!(ClaimExpired {
-        module_id,
-        booking_id,
-        lecturer,
-        active_strikes: strikes,
-    });
-    Ok(())
-}
-
-/// Expire an unclaimed booking whose delivery came and went without any lecturer
-/// claiming it. Permissionless once the no-show grace window past the scheduled
-/// delivery has passed. Returns the token's payment to the sponsor and the
-/// deposit to the school, so a stale booking can't strand the sponsor's escrow.
-/// A claimed no-show goes through `expire_claim`; a scored one through
-/// `finish_booking`.
+/// Expire an unscored booking past its no-show grace window. Permissionless.
+/// Refunds the payment to the sponsor and the deposit to the school, and frees a
+/// lecturer's claim without a strike (a slow score is indistinguishable from a
+/// no-show). Scored bookings settle via `finalize_score` instead.
 #[derive(Accounts)]
 #[instruction(module_id: u64, booking_id: u64)]
 pub struct ExpireBooking<'info> {
@@ -686,6 +530,11 @@ pub struct ExpireBooking<'info> {
     )]
     pub sponsorship: Box<Account<'info, Sponsorship>>,
 
+    /// Required only when the booking was already claimed; frees the lecturer's
+    /// claim (no strike).
+    #[account(mut)]
+    pub deliverer: Option<Box<Account<'info, Deliverer>>>,
+
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -694,15 +543,11 @@ pub fn expire_booking_handler(
     module_id: u64,
     booking_id: u64,
 ) -> Result<()> {
-    // Only an unclaimed, unscored booking expires here.
-    require!(
-        ctx.accounts.booking.lecturer.is_none(),
-        EducationError::LecturerAlreadySet
-    );
     require!(
         ctx.accounts.booking.score.is_none(),
         EducationError::ScoreAlreadySet
     );
+    let lecturer = ctx.accounts.booking.lecturer;
 
     let now = Clock::get()?.unix_timestamp;
     let deadline = ctx
@@ -740,7 +585,7 @@ pub fn expire_booking_handler(
     )?;
 
     // The token becomes bookable again and no longer counts against the
-    // sponsorship or the module's student allocation.
+    // sponsorship.
     ctx.accounts.sponsorship.amount = ctx
         .accounts
         .sponsorship
@@ -759,15 +604,34 @@ pub fn expire_booking_handler(
         .school_allocation
         .checked_add(1)
         .ok_or(EducationError::Overflow)?;
-    ctx.accounts.module.student_allocation = ctx
-        .accounts
-        .module
-        .student_allocation
-        .checked_sub(1)
-        .ok_or(EducationError::Underflow)?;
 
-    // Close the drained escrow to return its rent, unless a stray transfer left a
-    // residual balance behind.
+    // A claimed booking's token was in flight, so free the lecturer's claim
+    // (no strike); an unclaimed one still sits in the student allocation.
+    if let Some(lect) = lecturer {
+        let deliverer = ctx
+            .accounts
+            .deliverer
+            .as_mut()
+            .ok_or(EducationError::MissingAccount)?;
+        require!(
+            deliverer.deliverer == lect,
+            EducationError::WrongPayoutRecipient
+        );
+        deliverer.active_claims = deliverer
+            .active_claims
+            .checked_sub(1)
+            .ok_or(EducationError::Underflow)?;
+    } else {
+        ctx.accounts.module.student_allocation = ctx
+            .accounts
+            .module
+            .student_allocation
+            .checked_sub(1)
+            .ok_or(EducationError::Underflow)?;
+    }
+
+    // Close the now-empty escrow to return its rent; a stray transfer leaves it
+    // behind rather than reverting the expiry.
     ctx.accounts.booking_escrow.reload()?;
     if ctx.accounts.booking_escrow.amount == 0 {
         close_vault_account(
@@ -801,14 +665,6 @@ pub struct BookingExpired {
     pub module_id: u64,
     pub booking_id: u64,
     pub school: Pubkey,
-}
-
-#[event]
-pub struct ClaimExpired {
-    pub module_id: u64,
-    pub booking_id: u64,
-    pub lecturer: Pubkey,
-    pub active_strikes: u8,
 }
 
 #[event]

@@ -291,15 +291,21 @@ fn submit_score_wrong_lecturer_payout_acct() {
         &[&lecturer],
     );
 
+    ok(
+        &mut w.svm,
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000),
+        &agent,
+        &[&agent],
+    );
+
     // `other` is a registered deliverer (so its accounts resolve) but is not the
     // booking's lecturer, so paying its account out must revert.
     err(
         &mut w.svm,
-        submit_score_ix(
+        finalize_score_ix(
             &agent.pubkey(),
             0,
             0,
-            10_000,
             1,
             &creator.pubkey(),
             &operator,
@@ -430,39 +436,24 @@ fn submit_score_double_fails() {
         &lecturer,
         &[&lecturer],
     );
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     // A second score on the same booking must be rejected.
     err(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000),
         &agent,
         &[&agent],
         "ScoreAlreadySet",
@@ -477,8 +468,6 @@ fn submit_score_no_lecturer_fails() {
     let school = with_role(&mut w, Role::ModuleBooker);
     let lecturer = with_role(&mut w, Role::ModuleDeliverer);
     let agent = with_role(&mut w, Role::ModuleAIAgent);
-    let operator = w.operator.pubkey();
-    let protocol = w.protocol.pubkey();
     ok(
         &mut w.svm,
         create_module_ix(&creator.pubkey(), 1, 0, 10),
@@ -511,18 +500,7 @@ fn submit_score_no_lecturer_fails() {
 
     err(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000),
         &agent,
         &[&agent],
         "NoLecturerSet",
@@ -680,22 +658,18 @@ fn finish_booking_works_after_booker_role_revoked() {
         &lecturer,
         &[&lecturer],
     );
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator,
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator,
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
 
     // The school loses its role before settling; finishing must still succeed so

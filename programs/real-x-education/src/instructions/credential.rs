@@ -70,8 +70,10 @@ pub fn mint_credential_handler(
         uri.len() <= Credential::URI_MAX_LEN,
         EducationError::InvalidConfig
     );
+    // The credential attests the final result, so wait until the score has
+    // settled through the dispute window rather than the agent's first proposal.
     require!(
-        ctx.accounts.booking.score.is_some(),
+        ctx.accounts.booking.settled,
         EducationError::NoTestResultsSubmitted
     );
 

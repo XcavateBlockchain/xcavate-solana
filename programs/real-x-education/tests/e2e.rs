@@ -73,22 +73,18 @@ fn full_stack_region_to_score_payout() {
     // regions program; the payout must land in the governance-elected owner's
     // account, at the configured 8.3% of the base for a full score.
     let op_before = balance(&w.svm, &usdc_mint(), &operator.pubkey());
-    ok(
+    settle_score(
         &mut w.svm,
-        submit_score_ix(
-            &agent.pubkey(),
-            0,
-            0,
-            10_000,
-            1,
-            &creator.pubkey(),
-            &operator.pubkey(),
-            &protocol,
-            &lecturer.pubkey(),
-            &sponsor.pubkey(),
-        ),
         &agent,
-        &[&agent],
+        0,
+        0,
+        10_000,
+        1,
+        &creator.pubkey(),
+        &operator.pubkey(),
+        &protocol,
+        &lecturer.pubkey(),
+        &sponsor.pubkey(),
     );
     assert_eq!(
         balance(&w.svm, &usdc_mint(), &operator.pubkey()) - op_before,
@@ -170,12 +166,18 @@ fn region_ownership_change_reroutes_payout() {
     let region = Region::try_deserialize(&mut &region_acc.data[..]).unwrap();
     assert_eq!(region.owner, new_owner.pubkey());
 
+    ok(
+        &mut w.svm,
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000),
+        &agent,
+        &[&agent],
+    );
+
     // Paying the stale owner is rejected: the payee is pinned to `region.owner`.
-    let stale = submit_score_ix(
+    let stale = finalize_score_ix(
         &agent.pubkey(),
         0,
         0,
-        10_000,
         1,
         &creator.pubkey(),
         &old_owner.pubkey(),
@@ -192,11 +194,10 @@ fn region_ownership_change_reroutes_payout() {
     let new_before = balance(&w.svm, &usdc_mint(), &new_owner.pubkey());
     ok(
         &mut w.svm,
-        submit_score_ix(
+        finalize_score_ix(
             &agent.pubkey(),
             0,
             0,
-            10_000,
             1,
             &creator.pubkey(),
             &new_owner.pubkey(),
@@ -214,7 +215,7 @@ fn region_ownership_change_reroutes_payout() {
 }
 
 // The two heaviest instructions are `create_module` (a mint plus
-// fractionalization) and `submit_score` (a five way token split reading a
+// fractionalization) and `finalize_score` (a five way token split reading a
 // cross-program account). Measure their compute so a regression that creeps
 // toward the per-instruction budget is caught before it hits the wall.
 #[test]
@@ -263,13 +264,18 @@ fn hot_instructions_stay_within_compute_budget() {
         &lecturer,
         &[&lecturer],
     );
+    ok(
+        &mut w.svm,
+        submit_score_ix(&agent.pubkey(), 0, 0, 10_000),
+        &agent,
+        &[&agent],
+    );
     let score_cu = send_cu(
         &mut w.svm,
-        submit_score_ix(
+        finalize_score_ix(
             &agent.pubkey(),
             0,
             0,
-            10_000,
             1,
             &creator.pubkey(),
             &operator.pubkey(),
@@ -283,13 +289,13 @@ fn hot_instructions_stay_within_compute_budget() {
 
     // Observed around 67k and 79k; the ceilings leave headroom for minor churn
     // while still flagging a real blow-up well before the 200k per-ix budget.
-    println!("compute units: create_module={create_cu}, submit_score={score_cu}");
+    println!("compute units: create_module={create_cu}, finalize_score={score_cu}");
     assert!(
         create_cu < 100_000,
         "create_module compute regressed: {create_cu}"
     );
     assert!(
         score_cu < 110_000,
-        "submit_score compute regressed: {score_cu}"
+        "finalize_score compute regressed: {score_cu}"
     );
 }

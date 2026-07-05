@@ -344,6 +344,17 @@ pub fn balance(svm: &LiteSVM, mint: &Pubkey, owner: &Pubkey) -> u64 {
     SplAccount::unpack(&acc.data).unwrap().amount
 }
 
+/// Simulate an unsolicited transfer of `extra` units into an existing token
+/// account (anyone can transfer into a program-owned escrow), used to test that
+/// dusting can't brick a close.
+pub fn dust(svm: &mut LiteSVM, token_account: &Pubkey, extra: u64) {
+    let mut acc = svm.get_account(token_account).unwrap();
+    let mut spl = SplAccount::unpack(&acc.data).unwrap();
+    spl.amount += extra;
+    spl.pack_into_slice(&mut acc.data);
+    svm.set_account(*token_account, acc).unwrap();
+}
+
 pub fn spl_amount(svm: &LiteSVM, addr: &Pubkey) -> u64 {
     let acc = svm.get_account(addr).unwrap();
     SplAccount::unpack(&acc.data).unwrap().amount
@@ -491,6 +502,7 @@ pub fn default_params() -> ConfigParams {
         cancellation_window: 1_000,
         no_show_grace: 1_000,
         max_delivery_window: i64::MAX,
+        dispute_window: 0,
         max_cancellations: 3,
         max_strikes: 3,
         strike_slash_bps: 1_000,
@@ -714,49 +726,9 @@ pub fn cancel_claim_ix(lecturer: &Pubkey, module_id: u64, booking_id: u64) -> In
     )
 }
 
-/// Permissionless no-show expiry. `lecturer` is the claimant being struck.
-pub fn expire_claim_ix(
-    cranker: &Pubkey,
-    lecturer: &Pubkey,
-    module_id: u64,
-    booking_id: u64,
-) -> Instruction {
-    Instruction::new_with_bytes(
-        eid(),
-        &real_x_education::instruction::ExpireClaim {
-            module_id,
-            booking_id,
-        }
-        .data(),
-        real_x_education::accounts::ExpireClaim {
-            cranker: *cranker,
-            config: config_pda(),
-            module: module_pda(module_id),
-            lecturer: *lecturer,
-            deliverer: deliverer_pda(lecturer),
-            booking: booking_pda(module_id, booking_id),
-            xcav_mint: xcav_mint(),
-            vault: vault(),
-            treasury: treasury_pda(),
-            token_program: TOKEN_PROGRAM_ID,
-        }
-        .to_account_metas(None),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn submit_score_ix(
-    agent: &Pubkey,
-    module_id: u64,
-    booking_id: u64,
-    score: u16,
-    region: u16,
-    creator: &Pubkey,
-    operator: &Pubkey,
-    protocol: &Pubkey,
-    lecturer: &Pubkey,
-    sponsor: &Pubkey,
-) -> Instruction {
+/// The AI agent proposes a score. This only opens the dispute window; payment is
+/// released later by `finalize_score_ix`.
+pub fn submit_score_ix(agent: &Pubkey, module_id: u64, booking_id: u64, score: u16) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
         &real_x_education::instruction::SubmitImpactScore {
@@ -768,8 +740,37 @@ pub fn submit_score_ix(
         real_x_education::accounts::SubmitImpactScore {
             agent: *agent,
             config: config_pda(),
-            module: module_pda(module_id),
             agent_role: role_pda(agent, Role::ModuleAIAgent),
+            booking: booking_pda(module_id, booking_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Finalize a scored booking and pay everyone out. Permissionless.
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_score_ix(
+    cranker: &Pubkey,
+    module_id: u64,
+    booking_id: u64,
+    region: u16,
+    creator: &Pubkey,
+    operator: &Pubkey,
+    protocol: &Pubkey,
+    lecturer: &Pubkey,
+    sponsor: &Pubkey,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::FinalizeScore {
+            module_id,
+            booking_id,
+        }
+        .data(),
+        real_x_education::accounts::FinalizeScore {
+            cranker: *cranker,
+            config: config_pda(),
+            module: module_pda(module_id),
             booking: booking_pda(module_id, booking_id),
             region_account: region_pda(region),
             payment_mint: usdc_mint(),
@@ -786,6 +787,93 @@ pub fn submit_score_ix(
         }
         .to_account_metas(None),
     )
+}
+
+/// Dispute a proposed score with an amended one. Signed by the school or lecturer.
+pub fn dispute_score_ix(
+    party: &Pubkey,
+    module_id: u64,
+    booking_id: u64,
+    proposed_score: u16,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::DisputeScore {
+            module_id,
+            booking_id,
+            proposed_score,
+        }
+        .data(),
+        real_x_education::accounts::DisputeScore {
+            party: *party,
+            config: config_pda(),
+            booking: booking_pda(module_id, booking_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Accept or reject a disputed amendment. Signed by the counterparty.
+pub fn resolve_dispute_ix(
+    counterparty: &Pubkey,
+    module_id: u64,
+    booking_id: u64,
+    accept: bool,
+) -> Instruction {
+    Instruction::new_with_bytes(
+        eid(),
+        &real_x_education::instruction::ResolveDispute {
+            module_id,
+            booking_id,
+            accept,
+        }
+        .data(),
+        real_x_education::accounts::ResolveDispute {
+            counterparty: *counterparty,
+            booking: booking_pda(module_id, booking_id),
+        }
+        .to_account_metas(None),
+    )
+}
+
+/// Propose a score and finalize it in one call (dispute window is 0 by default).
+/// Both steps expected to succeed.
+#[allow(clippy::too_many_arguments)]
+pub fn settle_score(
+    svm: &mut LiteSVM,
+    agent: &Keypair,
+    module_id: u64,
+    booking_id: u64,
+    score: u16,
+    region: u16,
+    creator: &Pubkey,
+    operator: &Pubkey,
+    protocol: &Pubkey,
+    lecturer: &Pubkey,
+    sponsor: &Pubkey,
+) {
+    ok(
+        svm,
+        submit_score_ix(&agent.pubkey(), module_id, booking_id, score),
+        agent,
+        &[agent],
+    );
+    ok(
+        svm,
+        finalize_score_ix(
+            &agent.pubkey(),
+            module_id,
+            booking_id,
+            region,
+            creator,
+            operator,
+            protocol,
+            lecturer,
+            sponsor,
+        ),
+        agent,
+        &[agent],
+    );
 }
 
 pub fn finish_ix(school: &Pubkey, module_id: u64, booking_id: u64) -> Instruction {
@@ -829,6 +917,7 @@ pub fn expire_booking_ix(
     module_id: u64,
     sponsor_id: u64,
     booking_id: u64,
+    lecturer: Option<&Pubkey>,
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
@@ -850,6 +939,7 @@ pub fn expire_booking_ix(
             sponsor_escrow: sponsor_escrow_pda(module_id, sponsor_id),
             booking_escrow: book_escrow_pda(module_id, booking_id),
             sponsorship: sponsorship_pda(module_id, sponsor_id),
+            deliverer: lecturer.map(deliverer_pda),
             token_program: TOKEN_PROGRAM_ID,
         }
         .to_account_metas(None),
@@ -1937,13 +2027,12 @@ pub fn book_asset_ix(
     )
 }
 
-/// Submit a score for a booking settled in an arbitrary accepted asset.
+/// Finalize a booking settled in an arbitrary accepted asset. Permissionless.
 #[allow(clippy::too_many_arguments)]
-pub fn submit_score_asset_ix(
-    agent: &Pubkey,
+pub fn finalize_score_asset_ix(
+    cranker: &Pubkey,
     module_id: u64,
     booking_id: u64,
-    score: u16,
     region: u16,
     creator: &Pubkey,
     operator: &Pubkey,
@@ -1954,17 +2043,15 @@ pub fn submit_score_asset_ix(
 ) -> Instruction {
     Instruction::new_with_bytes(
         eid(),
-        &real_x_education::instruction::SubmitImpactScore {
+        &real_x_education::instruction::FinalizeScore {
             module_id,
             booking_id,
-            score,
         }
         .data(),
-        real_x_education::accounts::SubmitImpactScore {
-            agent: *agent,
+        real_x_education::accounts::FinalizeScore {
+            cranker: *cranker,
             config: config_pda(),
             module: module_pda(module_id),
-            agent_role: role_pda(agent, Role::ModuleAIAgent),
             booking: booking_pda(module_id, booking_id),
             region_account: region_pda(region),
             payment_mint: *mint,
@@ -1981,4 +2068,45 @@ pub fn submit_score_asset_ix(
         }
         .to_account_metas(None),
     )
+}
+
+/// Propose then finalize a score for a booking settled in an arbitrary asset.
+#[allow(clippy::too_many_arguments)]
+pub fn settle_score_asset(
+    svm: &mut LiteSVM,
+    agent: &Keypair,
+    module_id: u64,
+    booking_id: u64,
+    score: u16,
+    region: u16,
+    creator: &Pubkey,
+    operator: &Pubkey,
+    protocol: &Pubkey,
+    lecturer: &Pubkey,
+    sponsor: &Pubkey,
+    mint: &Pubkey,
+) {
+    ok(
+        svm,
+        submit_score_ix(&agent.pubkey(), module_id, booking_id, score),
+        agent,
+        &[agent],
+    );
+    ok(
+        svm,
+        finalize_score_asset_ix(
+            &agent.pubkey(),
+            module_id,
+            booking_id,
+            region,
+            creator,
+            operator,
+            protocol,
+            lecturer,
+            sponsor,
+            mint,
+        ),
+        agent,
+        &[agent],
+    );
 }
